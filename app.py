@@ -24,7 +24,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Inventory Intake Task 2.7.1"
+APP_TITLE = "High Style AI – Inventory Intake Task 2.7.2"
 
 def init_state():
     if "uploader_version" not in st.session_state:
@@ -289,6 +289,15 @@ You are revising a High Style Deco inventory draft.
 
 Use the user's feedback to improve the draft BEFORE it is saved to the Google Sheet.
 
+IMPORTANT:
+- Do not simply return the same draft.
+- The revised title, description, price, or metadata must change meaningfully when feedback requests a change.
+- Treat the user's feedback as the highest priority unless it conflicts with house rules.
+- If the user asks for a shorter title, make it shorter.
+- If the user says the description is wrong or weak, rewrite it substantially.
+- If the user says the price is too high or too low, adjust the price and explain the revised logic in internal_notes_for_review.
+- Preserve only facts that still appear accurate.
+
 Keep following all house rules:
 - Title max 80 characters.
 - No country/place of origin in title.
@@ -305,6 +314,8 @@ CURRENT DRAFT:
 
 USER FEEDBACK / EDITING INSTRUCTIONS:
 {json.dumps(feedback_context, indent=2)}
+
+You must clearly apply this feedback in the revised JSON.
 
 ORIGINAL ITEM CONTEXT:
 Dimensions: {dims}
@@ -359,7 +370,7 @@ def send_learning_log(url, payload):
 init_state()
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 st.title(APP_TITLE)
-st.caption("Feedback Retry Loop with full form reset fix.")
+st.caption("Feedback Retry Loop with refresh fix: revised AI output now appears immediately.")
 
 form_key = st.session_state.get("form_version", 0)
 
@@ -475,6 +486,8 @@ if "draft" in st.session_state:
     st.text_area("Price Tag Text", value=str(draft.get("price_tag_text", "")), height=140, key=f"price_tag_review_{form_key}")
     seo_text = st.text_input("SEO Keywords", value=seo_text, key=f"seo_review_{form_key}")
     review_notes = st.text_area("Internal Notes for Review", value=str(draft.get("internal_notes_for_review", "")), height=100, key=f"internal_review_notes_{form_key}")
+    if draft.get("revision_summary"):
+        st.info("Revision summary: " + str(draft.get("revision_summary", "")))
 
     st.subheader("5. Feedback / Retry")
     f1, f2, f3, f4 = st.columns(4)
@@ -542,6 +555,8 @@ if "draft" in st.session_state:
                     "after": result["draft"]
                 })
                 st.session_state["draft"] = result["draft"]
+                # Critical: force all editable widgets to rebuild so the revised AI output appears.
+                st.session_state["form_version"] = st.session_state.get("form_version", 0) + 1
                 st.success("AI revised the draft using your feedback.")
                 st.rerun()
 
