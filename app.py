@@ -24,7 +24,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Inventory Intake Task 3.1"
+APP_TITLE = "High Style AI – Inventory Intake Task 3.1.1"
 
 # -----------------------------
 # State / Reset
@@ -612,7 +612,16 @@ Return ONLY valid JSON using this schema:
 # Google Sheet
 # -----------------------------
 
+def normalize_google_script_url(url):
+    url = str(url or "").strip()
+    if not url:
+        return ""
+    if url.startswith("AKfy"):
+        return "https://script.google.com/macros/s/" + url.strip("/") + "/exec"
+    return url
+
 def send_to_google_sheet(url, payload):
+    url = normalize_google_script_url(url)
     try:
         r = requests.post(url, data=json.dumps(payload), headers={"Content-Type": "application/json"}, timeout=30, allow_redirects=True)
         if r.status_code >= 400:
@@ -630,6 +639,7 @@ def send_to_google_sheet(url, payload):
         return False, str(e)
 
 def send_learning_log(url, payload):
+    url = normalize_google_script_url(url)
     learning_payload = dict(payload)
     learning_payload["Action"] = "Learning_Log"
     try:
@@ -651,7 +661,7 @@ if not st.session_state.get("authenticated"):
     login_gate()
 
 st.title(APP_TITLE)
-st.caption("Employee Access + High Style Brain: tracked submissions, approvals, and learning.")
+st.caption("Employee Access + High Style Brain + hidden Google Sheet connection.")
 
 current_user = st.session_state.get("current_user", "Unknown")
 current_role = st.session_state.get("current_role", "Employee")
@@ -667,7 +677,11 @@ with st.sidebar:
         st.rerun()
 
     st.header("Google Sheet")
-    web_app_url = st.text_input("Apps Script Web App URL", type="password", placeholder="Paste URL ending in /exec")
+    web_app_url = get_secret("GOOGLE_APPS_SCRIPT_URL")
+    if web_app_url:
+        st.success("Google Sheet connected")
+    else:
+        st.error("Google Sheet URL missing from Streamlit secrets")
 
     st.header("Cloudinary")
     c_ok, c_msg = configure_cloudinary()
@@ -915,7 +929,7 @@ if "draft" in st.session_state:
             st.rerun()
 
     elif not web_app_url:
-        st.warning("Paste your Apps Script Web App URL in the sidebar.")
+        st.warning("Google Sheet URL is missing from Streamlit secrets. Add GOOGLE_APPS_SCRIPT_URL in Streamlit app secrets.")
     elif not c_ok:
         st.warning("Cloudinary is not configured.")
     elif st.button("Approve & Save to Google Sheet", type="primary"):

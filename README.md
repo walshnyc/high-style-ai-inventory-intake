@@ -1,13 +1,14 @@
-# High Style AI – Inventory Intake Task 3.1: Employee Access + Submitter Tracking
+# High Style AI – Inventory Intake Task 3.1.1: Hidden Google Sheet Connection
 
-This version keeps Task 3.0 High Style Brain and adds a simple employee access layer.
+This version keeps Task 3.1 employee access and removes the need for anyone to paste the Apps Script Web App URL inside the app.
 
 ## What this adds
 
-- Simple login screen
-- Tracks who submitted the item
-- Tracks who approved/saved the item
-- Saves submitter/approver fields to Google Sheets payload
+- Google Apps Script URL is stored in Streamlit Secrets
+- Sidebar now shows `Google Sheet connected`
+- Employees cannot paste the wrong URL
+- Keeps login screen
+- Keeps employee submitter / approver tracking
 - Keeps High Style Brain V5 matching
 - Keeps Cloudinary image upload
 - Keeps Google Sheet save
@@ -22,9 +23,11 @@ Upload all of these:
 - README.md
 - data/High_Style_Deco_Master_Dataset_V5_AI_Ready_Verification.xlsx
 
+Do not upload `__pycache__`.
+
 ## Streamlit secrets
 
-Recommended simple version:
+Use this format:
 
 ```toml
 OPENAI_API_KEY = "your_openai_key"
@@ -35,24 +38,16 @@ CLOUDINARY_API_SECRET = "your_cloudinary_api_secret"
 
 EMPLOYEE_PASSWORD = "choose_employee_password"
 ADMIN_PASSWORD = "choose_admin_password"
+
+GOOGLE_APPS_SCRIPT_URL = "https://script.google.com/macros/s/xxxxx/exec"
 ```
 
-Optional named-user version:
+## Login
 
-```toml
-EMPLOYEE_USERS = "Paul:paul_password:Admin,Employee Name:employee_password:Employee"
-```
+Admin:
+- Name: Paul
+- Password: your `ADMIN_PASSWORD`
 
-If you use `EMPLOYEE_USERS`, the app shows a user dropdown. If not, it asks for a name and password.
-
-## Google Apps Script note
-
-To store the new fields in Google Sheets, add these headers/fields to your Apps Script row order later:
-
-- Submitted_By
-- Submitted_Date
-- Approved_By
-- Approved_Date
-- User_Role
-
-The app should still send the existing fields as before.
+Employee:
+- Name: employee name
+- Password: your `EMPLOYEE_PASSWORD`
