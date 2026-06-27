@@ -1,25 +1,24 @@
-# High Style AI – Inventory Intake Task 2.7.3: Dimension Save Fix
+# High Style AI – Inventory Intake Task 3.0: High Style Brain Reference
 
-This version fixes a dimension-saving issue after using **Try Again With Feedback**.
+This version forces the app to use the High Style Deco V5 historical dataset before generating titles and descriptions.
 
-## Fixes
+## What changed
+- Loads V5 from the `data/` folder
+- Creates an AI image/profile summary
+- Searches the V5 brain for similar historical High Style Deco records
+- Shows the matched examples in the app
+- Passes those examples into OpenAI before title/description generation
+- Retry feedback also includes the same High Style Brain matches
+- Keeps Cloudinary, Google Sheets save, Learning_Log, HEIC support, reset fixes, and dimension save fix
 
-- Preserves the original entered dimensions through retry refreshes
-- Uses the final reviewed `Dimensions` field when saving to Google Sheets
-- Keeps individual Height / Width / Depth / Diameter / Body Height / Seat Height values from the original dimension inputs
-- Keeps all 2.7.2 fixes:
-  - feedback retry refresh
-  - full form reset
-  - HEIC support
-  - Cloudinary upload
-  - Google Sheets save
-  - Learning_Log
+## Included data folder
+['High_Style_Deco_Master_Dataset_V5_AI_Ready_Verification.xlsx']
 
-## Deploy
+## GitHub deployment
+Upload the full contents of this folder to GitHub, including the `data` folder and V5 Excel file.
 
-Upload these three files to GitHub:
+Minimum files/folders:
 - app.py
 - requirements.txt
 - README.md
-
-Streamlit should auto-redeploy after the GitHub commit.
+- data/High_Style_Deco_Master_Dataset_V5_AI_Ready_Verification.xlsx
