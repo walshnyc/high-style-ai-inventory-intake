@@ -24,26 +24,42 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Inventory Intake Task 2.7"
+APP_TITLE = "High Style AI – Inventory Intake Task 2.7.1"
 
 def init_state():
     if "uploader_version" not in st.session_state:
         st.session_state["uploader_version"] = 0
+    if "form_version" not in st.session_state:
+        st.session_state["form_version"] = 0
     if "retry_history" not in st.session_state:
         st.session_state["retry_history"] = []
 
 def clear_entry_state():
-    keys_to_clear = [
+    exact_keys_to_clear = [
         "draft", "item_id", "photo_names", "dims_inputs", "input_notes",
-        "photos_for_save", "last_saved", "original_ai_draft",
-        "retry_history", "height_input", "width_input", "depth_input",
-        "diameter_input", "body_height_input", "seat_height_input",
-        "known_info_input", "notes_input", "target_price_input"
+        "photos_for_save", "last_saved", "original_ai_draft", "retry_history"
     ]
-    for k in keys_to_clear:
-        if k in st.session_state:
+
+    prefixes_to_clear = [
+        "height_input_", "width_input_", "depth_input_", "diameter_input_",
+        "body_height_input_", "seat_height_input_", "known_info_input_",
+        "notes_input_", "target_price_input_", "item_id_review_",
+        "title_review_", "description_review_", "suggested_price_review_",
+        "approved_price_review_", "confidence_review_", "category_review_",
+        "subcategory_review_", "style_review_", "period_review_",
+        "country_review_", "maker_review_", "materials_review_",
+        "dims_final_review_", "condition_notes_review_",
+        "price_tag_review_", "seo_review_", "internal_review_notes_",
+        "title_feedback_", "description_feedback_", "price_feedback_",
+        "reference_feedback_", "changed_notes_"
+    ]
+
+    for k in list(st.session_state.keys()):
+        if k in exact_keys_to_clear or any(k.startswith(prefix) for prefix in prefixes_to_clear):
             del st.session_state[k]
+
     st.session_state["uploader_version"] = st.session_state.get("uploader_version", 0) + 1
+    st.session_state["form_version"] = st.session_state.get("form_version", 0) + 1
     st.session_state["retry_history"] = []
 
 def get_openai_client():
@@ -343,7 +359,9 @@ def send_learning_log(url, payload):
 init_state()
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 st.title(APP_TITLE)
-st.caption("Feedback Retry Loop: use feedback to regenerate before final Google Sheet save.")
+st.caption("Feedback Retry Loop with full form reset fix.")
+
+form_key = st.session_state.get("form_version", 0)
 
 with st.sidebar:
     st.header("Google Sheet")
@@ -379,22 +397,22 @@ if photos:
 
 st.header("2. Enter dimensions")
 c1, c2, c3 = st.columns(3)
-with c1: height = st.text_input("Height in", key="height_input")
-with c2: width = st.text_input("Width in", key="width_input")
-with c3: depth = st.text_input("Depth in", key="depth_input")
+with c1: height = st.text_input("Height in", key=f"height_input_{form_key}")
+with c2: width = st.text_input("Width in", key=f"width_input_{form_key}")
+with c3: depth = st.text_input("Depth in", key=f"depth_input_{form_key}")
 c4, c5, c6 = st.columns(3)
-with c4: diameter = st.text_input("Diameter in", key="diameter_input")
-with c5: body_height = st.text_input("Body Height in", key="body_height_input")
-with c6: seat_height = st.text_input("Seat Height in", key="seat_height_input")
+with c4: diameter = st.text_input("Diameter in", key=f"diameter_input_{form_key}")
+with c5: body_height = st.text_input("Body Height in", key=f"body_height_input_{form_key}")
+with c6: seat_height = st.text_input("Seat Height in", key=f"seat_height_input_{form_key}")
 
 dims = format_dimensions(height, width, depth, diameter, body_height, seat_height)
 if dims:
     st.caption(f"Formatted dimensions: {dims}")
 
 st.header("3. Add known info")
-known_info = st.text_area("Known maker/style/materials/period", height=90, key="known_info_input")
-notes = st.text_area("Internal notes", height=90, key="notes_input")
-target_price = st.text_input("Optional target/list price", key="target_price_input")
+known_info = st.text_area("Known maker/style/materials/period", height=90, key=f"known_info_input_{form_key}")
+notes = st.text_area("Internal notes", height=90, key=f"notes_input_{form_key}")
+target_price = st.text_input("Optional target/list price", key=f"target_price_input_{form_key}")
 
 if st.button("Generate Draft Item Record", type="primary"):
     if not photos:
@@ -425,54 +443,55 @@ if "draft" in st.session_state:
     st.divider()
     st.header("4. Review / Edit Draft")
 
-    item_id = st.text_input("Item ID", value=st.session_state["item_id"])
-    title = st.text_input("Title", value=str(draft.get("title", "")), max_chars=80)
+    item_id = st.text_input("Item ID", value=st.session_state["item_id"], key=f"item_id_review_{form_key}")
+    title = st.text_input("Title", value=str(draft.get("title", "")), max_chars=80, key=f"title_review_{form_key}")
     st.caption(f"Title length: {len(title)} / 80")
-    description = st.text_area("Description", value=str(draft.get("description", "")), height=260)
+    description = st.text_area("Description", value=str(draft.get("description", "")), height=260, key=f"description_review_{form_key}")
     st.caption(f"Approx word count: {len(description.split())}")
 
     c1, c2, c3 = st.columns(3)
-    with c1: suggested_price = st.text_input("Suggested Price USD", value=str(draft.get("suggested_price_usd", "")))
-    with c2: approved_price = st.text_input("Approved Price USD", value=str(draft.get("suggested_price_usd", "")))
-    with c3: confidence = st.text_input("AI Confidence", value=str(draft.get("ai_confidence_0_to_100", "")))
+    with c1: suggested_price = st.text_input("Suggested Price USD", value=str(draft.get("suggested_price_usd", "")), key=f"suggested_price_review_{form_key}")
+    with c2: approved_price = st.text_input("Approved Price USD", value=str(draft.get("suggested_price_usd", "")), key=f"approved_price_review_{form_key}")
+    with c3: confidence = st.text_input("AI Confidence", value=str(draft.get("ai_confidence_0_to_100", "")), key=f"confidence_review_{form_key}")
 
     c4, c5, c6 = st.columns(3)
-    with c4: category = st.text_input("Category", value=str(draft.get("category", "")))
-    with c5: subcategory = st.text_input("Subcategory", value=str(draft.get("subcategory", "")))
-    with c6: style = st.text_input("Style", value=str(draft.get("style", "")))
+    with c4: category = st.text_input("Category", value=str(draft.get("category", "")), key=f"category_review_{form_key}")
+    with c5: subcategory = st.text_input("Subcategory", value=str(draft.get("subcategory", "")), key=f"subcategory_review_{form_key}")
+    with c6: style = st.text_input("Style", value=str(draft.get("style", "")), key=f"style_review_{form_key}")
 
     c7, c8, c9 = st.columns(3)
-    with c7: period = st.text_input("Period", value=str(draft.get("period", "")))
-    with c8: country = st.text_input("Country / Region", value=str(draft.get("country", "")))
-    with c9: maker = st.text_input("Designer / Maker", value=str(draft.get("designer_or_maker", "")))
+    with c7: period = st.text_input("Period", value=str(draft.get("period", "")), key=f"period_review_{form_key}")
+    with c8: country = st.text_input("Country / Region", value=str(draft.get("country", "")), key=f"country_review_{form_key}")
+    with c9: maker = st.text_input("Designer / Maker", value=str(draft.get("designer_or_maker", "")), key=f"maker_review_{form_key}")
 
     mats = draft.get("materials", [])
     materials_text = ", ".join(mats) if isinstance(mats, list) else str(mats)
     seo = draft.get("seo_keywords", [])
     seo_text = ", ".join(seo) if isinstance(seo, list) else str(seo)
 
-    materials_text = st.text_input("Materials", value=materials_text)
-    dims_final = st.text_input("Dimensions", value=dims)
-    condition_notes = st.text_area("Condition Notes", value=str(draft.get("condition_notes", "")), height=90)
-    st.text_area("Price Tag Text", value=str(draft.get("price_tag_text", "")), height=140)
-    seo_text = st.text_input("SEO Keywords", value=seo_text)
-    review_notes = st.text_area("Internal Notes for Review", value=str(draft.get("internal_notes_for_review", "")), height=100)
+    materials_text = st.text_input("Materials", value=materials_text, key=f"materials_review_{form_key}")
+    dims_final = st.text_input("Dimensions", value=dims, key=f"dims_final_review_{form_key}")
+    condition_notes = st.text_area("Condition Notes", value=str(draft.get("condition_notes", "")), height=90, key=f"condition_notes_review_{form_key}")
+    st.text_area("Price Tag Text", value=str(draft.get("price_tag_text", "")), height=140, key=f"price_tag_review_{form_key}")
+    seo_text = st.text_input("SEO Keywords", value=seo_text, key=f"seo_review_{form_key}")
+    review_notes = st.text_area("Internal Notes for Review", value=str(draft.get("internal_notes_for_review", "")), height=100, key=f"internal_review_notes_{form_key}")
 
     st.subheader("5. Feedback / Retry")
     f1, f2, f3, f4 = st.columns(4)
     with f1:
-        title_feedback = st.selectbox("Title quality", ["Excellent", "Good", "Needs edits", "Poor"])
+        title_feedback = st.selectbox("Title quality", ["Excellent", "Good", "Needs edits", "Poor"], key=f"title_feedback_{form_key}")
     with f2:
-        description_feedback = st.selectbox("Description quality", ["Excellent", "Good", "Needs edits", "Poor"])
+        description_feedback = st.selectbox("Description quality", ["Excellent", "Good", "Needs edits", "Poor"], key=f"description_feedback_{form_key}")
     with f3:
-        price_feedback = st.selectbox("Price suggestion", ["About right", "Too high", "Too low", "Not enough data"])
+        price_feedback = st.selectbox("Price suggestion", ["About right", "Too high", "Too low", "Not enough data"], key=f"price_feedback_{form_key}")
     with f4:
-        reference_feedback = st.selectbox("Reference quality", ["Good references", "Some useful", "Not useful", "Not used"])
+        reference_feedback = st.selectbox("Reference quality", ["Good references", "Some useful", "Not useful", "Not used"], key=f"reference_feedback_{form_key}")
 
     changed_notes = st.text_area(
         "Feedback for AI before saving",
         placeholder="Tell the AI what to fix. Example: make title shorter, remove maker attribution, make description more sales focused, price too low.",
-        height=110
+        height=110,
+        key=f"changed_notes_{form_key}"
     )
 
     col_retry, col_dummy = st.columns([1, 2])
