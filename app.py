@@ -24,7 +24,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Inventory Intake Task 3.0"
+APP_TITLE = "High Style AI – Inventory Intake Task 3.1"
 
 # -----------------------------
 # State / Reset
@@ -42,7 +42,7 @@ def clear_entry_state():
     exact_keys = [
         "draft", "item_id", "photo_names", "dims_inputs", "dims_formatted",
         "input_notes", "photos_for_save", "last_saved", "original_ai_draft",
-        "retry_history", "brain_profile", "brain_matches"
+        "retry_history", "brain_profile", "brain_matches", "submitted_by", "submitted_date"
     ]
     prefixes = [
         "height_input_", "width_input_", "depth_input_", "diameter_input_",
@@ -75,6 +75,67 @@ def get_secret(name):
         return st.secrets.get(name)
     except Exception:
         return None
+
+def get_allowed_users():
+    """
+    Optional Streamlit secret:
+    EMPLOYEE_USERS = "Paul:admin_password:Admin,Employee Name:employee_password:Employee"
+    If not supplied, the app falls back to simple shared passwords.
+    """
+    raw = get_secret("EMPLOYEE_USERS")
+    users = {}
+    if raw:
+        for part in str(raw).split(","):
+            bits = [b.strip() for b in part.split(":")]
+            if len(bits) >= 2:
+                name = bits[0]
+                password = bits[1]
+                role = bits[2] if len(bits) >= 3 else "Employee"
+                users[name] = {"password": password, "role": role}
+    return users
+
+def login_gate():
+    st.title("High Style AI")
+    st.caption("Inventory Assistant")
+
+    users = get_allowed_users()
+    admin_password = get_secret("ADMIN_PASSWORD")
+    employee_password = get_secret("EMPLOYEE_PASSWORD")
+
+    with st.form("login_form"):
+        if users:
+            user_name = st.selectbox("User", list(users.keys()))
+        else:
+            user_name = st.text_input("Name", placeholder="Enter your name")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Log in")
+
+    if submitted:
+        if users:
+            expected = users.get(user_name, {}).get("password")
+            if password == expected:
+                st.session_state["authenticated"] = True
+                st.session_state["current_user"] = user_name
+                st.session_state["current_role"] = users.get(user_name, {}).get("role", "Employee")
+                st.rerun()
+            else:
+                st.error("Incorrect password.")
+        else:
+            if admin_password and password == admin_password:
+                st.session_state["authenticated"] = True
+                st.session_state["current_user"] = user_name or "Paul"
+                st.session_state["current_role"] = "Admin"
+                st.rerun()
+            elif employee_password and password == employee_password:
+                st.session_state["authenticated"] = True
+                st.session_state["current_user"] = user_name or "Employee"
+                st.session_state["current_role"] = "Employee"
+                st.rerun()
+            else:
+                st.error("Incorrect password.")
+
+    st.info("Ask Paul for access if you do not have a password.")
+    st.stop()
 
 def get_openai_client():
     key = get_secret("OPENAI_API_KEY")
@@ -585,12 +646,26 @@ def send_learning_log(url, payload):
 
 init_state()
 st.set_page_config(page_title=APP_TITLE, layout="wide")
-st.title(APP_TITLE)
-st.caption("High Style Brain Reference: every draft uses similar historical V5 records before writing.")
 
+if not st.session_state.get("authenticated"):
+    login_gate()
+
+st.title(APP_TITLE)
+st.caption("Employee Access + High Style Brain: tracked submissions, approvals, and learning.")
+
+current_user = st.session_state.get("current_user", "Unknown")
+current_role = st.session_state.get("current_role", "Employee")
 form_key = st.session_state.get("form_version", 0)
 
 with st.sidebar:
+    st.success(f"Logged in as: {current_user} ({current_role})")
+    if st.button("Log out"):
+        clear_entry_state()
+        st.session_state.pop("authenticated", None)
+        st.session_state.pop("current_user", None)
+        st.session_state.pop("current_role", None)
+        st.rerun()
+
     st.header("Google Sheet")
     web_app_url = st.text_input("Apps Script Web App URL", type="password", placeholder="Paste URL ending in /exec")
 
@@ -644,6 +719,7 @@ if dims:
     st.caption(f"Formatted dimensions: {dims}")
 
 st.header("3. Add known info")
+st.caption(f"Submitted by: {current_user}")
 known_info = st.text_area("Known maker/style/materials/period", height=90, key=f"known_info_input_{form_key}")
 notes = st.text_area("Internal notes", height=90, key=f"notes_input_{form_key}")
 target_price = st.text_input("Optional target/list price", key=f"target_price_input_{form_key}")
@@ -680,6 +756,8 @@ if st.button("Generate Draft Item Record", type="primary"):
     st.session_state["dims_formatted"] = dims
     st.session_state["input_notes"] = notes
     st.session_state["photos_for_save"] = photos
+    st.session_state["submitted_by"] = current_user
+    st.session_state["submitted_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
     st.session_state["retry_history"] = []
 
 if st.session_state.get("brain_matches"):
@@ -828,6 +906,7 @@ if "draft" in st.session_state:
     st.dataframe(preview, use_container_width=True, hide_index=True)
 
     st.header("6. Approve & Save Final Version to Google Sheet")
+    st.caption(f"Approver: {current_user}")
 
     if st.session_state.get("last_saved"):
         st.success("Saved successfully.")
@@ -860,7 +939,12 @@ if "draft" in st.session_state:
             "Category": category, "Subcategory": subcategory, "Style": style, "Period": period, "Country": country,
             "Designer_or_Maker": maker, "Materials": materials_text, "Condition_Notes": condition_notes,
             "Internal_Notes": (st.session_state.get("input_notes", "") + " | " + review_notes).strip(" |"),
-            "Ready_For_Photos": "Yes", "Ready_For_Publishing": "No", "Created_Date": now, "Last_Updated": now, "SEO_Keywords": seo_text
+            "Ready_For_Photos": "Yes", "Ready_For_Publishing": "No", "Created_Date": now, "Last_Updated": now, "SEO_Keywords": seo_text,
+            "Submitted_By": st.session_state.get("submitted_by", current_user),
+            "Submitted_Date": st.session_state.get("submitted_date", now),
+            "Approved_By": current_user,
+            "Approved_Date": now,
+            "User_Role": current_role
         }
 
         learning_payload = {
@@ -873,7 +957,12 @@ if "draft" in st.session_state:
             "Learning_Notes": changed_notes, "Retry_Count": len(st.session_state.get("retry_history", [])),
             "Retry_History_JSON": json.dumps(st.session_state.get("retry_history", []), default=str),
             "Primary_Image_URL": primary_url,
-            "High_Style_Brain_Matches_JSON": json.dumps(st.session_state.get("brain_matches", []), default=str)
+            "High_Style_Brain_Matches_JSON": json.dumps(st.session_state.get("brain_matches", []), default=str),
+            "Submitted_By": st.session_state.get("submitted_by", current_user),
+            "Submitted_Date": st.session_state.get("submitted_date", now),
+            "Approved_By": current_user,
+            "Approved_Date": now,
+            "User_Role": current_role
         }
 
         with st.spinner("Sending final approved item to Google Sheet..."):
