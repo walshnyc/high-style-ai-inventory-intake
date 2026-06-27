@@ -1,0 +1,7 @@
+streamlit
+pandas
+pillow
+pillow-heif
+openai
+requests
+cloudinary
