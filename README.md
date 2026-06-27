@@ -1,14 +1,19 @@
-# High Style AI – Inventory Intake Task 2.7.2: Feedback Retry Refresh Fix
+# High Style AI – Inventory Intake Task 2.7.3: Dimension Save Fix
 
-This version fixes the issue where **Try Again With Feedback** could appear to reload the exact same title/description because Streamlit kept old widget values on screen.
+This version fixes a dimension-saving issue after using **Try Again With Feedback**.
 
 ## Fixes
 
-- After retry, editable fields rebuild and show the revised AI output
-- Retry prompt is stricter: AI must apply feedback meaningfully
-- Adds visible revision summary when available
-- Keeps full form reset fix from 2.7.1
-- Keeps HEIC support, Cloudinary upload, Google Sheets save, and Learning_Log
+- Preserves the original entered dimensions through retry refreshes
+- Uses the final reviewed `Dimensions` field when saving to Google Sheets
+- Keeps individual Height / Width / Depth / Diameter / Body Height / Seat Height values from the original dimension inputs
+- Keeps all 2.7.2 fixes:
+  - feedback retry refresh
+  - full form reset
+  - HEIC support
+  - Cloudinary upload
+  - Google Sheets save
+  - Learning_Log
 
 ## Deploy
 
