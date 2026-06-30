@@ -24,7 +24,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Inventory Intake Task 3.1.1"
+APP_TITLE = "High Style AI – Inventory Intake Task 3.3"
 
 # -----------------------------
 # State / Reset
@@ -42,7 +42,7 @@ def clear_entry_state():
     exact_keys = [
         "draft", "item_id", "photo_names", "dims_inputs", "dims_formatted",
         "input_notes", "photos_for_save", "last_saved", "original_ai_draft",
-        "retry_history", "brain_profile", "brain_matches", "submitted_by", "submitted_date"
+        "retry_history", "brain_profile", "brain_matches", "submitted_by", "submitted_date", "loaded_draft", "draft_list"
     ]
     prefixes = [
         "height_input_", "width_input_", "depth_input_", "diameter_input_",
@@ -202,6 +202,38 @@ def upload_to_cloudinary(uploaded_file, item_id):
             os.remove(tmp_path)
         except Exception:
             pass
+
+
+def generate_draft_id():
+    return "DRAFT-" + datetime.now().strftime("%Y%m%d") + "-" + str(uuid.uuid4())[:6].upper()
+
+def upload_draft_photos_to_cloudinary(photos, draft_id):
+    urls = []
+    errors = []
+    for i, photo in enumerate(photos or [], 1):
+        url, err = upload_to_cloudinary(photo, f"{draft_id}-{i}")
+        if err:
+            errors.append(f"{getattr(photo, 'name', 'photo')} failed: {err}")
+        else:
+            urls.append(url)
+    return urls, errors
+
+def save_draft_to_google_sheet(url, payload):
+    payload = dict(payload)
+    payload["Action"] = "Draft_Save"
+    return send_to_google_sheet(url, payload)
+
+def list_drafts_from_google_sheet(url):
+    url = normalize_google_script_url(url)
+    payload = {"Action": "Draft_List"}
+    try:
+        r = requests.post(url, data=json.dumps(payload), headers={"Content-Type": "application/json"}, timeout=30, allow_redirects=True)
+        if r.status_code >= 400:
+            return False, f"HTTP {r.status_code}: {r.text[:500]}", []
+        data = r.json()
+        return True, "Loaded drafts.", data.get("drafts", [])
+    except Exception as e:
+        return False, str(e), []
 
 # -----------------------------
 # High Style Brain
@@ -432,6 +464,46 @@ def normalize_price(value):
     except Exception:
         return s
 
+def word_count(text):
+    return len(str(text or "").split())
+
+def simple_change_score(original, final):
+    a = str(original or "").strip()
+    b = str(final or "").strip()
+    if not a and not b:
+        return 0
+    if not a or not b:
+        return 100
+    a_words = set(re.findall(r"[a-z0-9]+", a.lower()))
+    b_words = set(re.findall(r"[a-z0-9]+", b.lower()))
+    if not a_words and not b_words:
+        return 0
+    overlap = len(a_words & b_words)
+    union = len(a_words | b_words) or 1
+    jaccard_change = 1 - (overlap / union)
+    length_change = min(abs(len(b) - len(a)) / max(len(a), 1), 1)
+    return int(round((jaccard_change * 0.75 + length_change * 0.25) * 100))
+
+def summarize_audit_metrics(original, final_title, final_description, final_price, retry_count):
+    original_title = original.get("title", "") if isinstance(original, dict) else ""
+    original_description = original.get("description", "") if isinstance(original, dict) else ""
+    original_price = original.get("suggested_price_usd", "") if isinstance(original, dict) else ""
+    title_change = simple_change_score(original_title, final_title)
+    description_change = simple_change_score(original_description, final_description)
+    overall_change = int(round((title_change * 0.35) + (description_change * 0.55) + (min(retry_count * 15, 100) * 0.10)))
+    return {
+        "Original_Title_Length": len(str(original_title or "")),
+        "Final_Title_Length": len(str(final_title or "")),
+        "Original_Description_Word_Count": word_count(original_description),
+        "Final_Description_Word_Count": word_count(final_description),
+        "Title_Change_Score": title_change,
+        "Description_Change_Score": description_change,
+        "Overall_Edit_Score": overall_change,
+        "Original_AI_Price": original_price,
+        "Final_Approved_Price": final_price,
+        "Retry_Count": retry_count
+    }
+
 def format_dimensions(h, w, d, dia, body_h, seat_h):
     parts = []
     if h: parts.append(f"Height: {h} in")
@@ -661,7 +733,7 @@ if not st.session_state.get("authenticated"):
     login_gate()
 
 st.title(APP_TITLE)
-st.caption("Employee Access + High Style Brain + hidden Google Sheet connection.")
+st.caption("Employee Access + High Style Brain + audit trail and learning metrics.")
 
 current_user = st.session_state.get("current_user", "Unknown")
 current_role = st.session_state.get("current_role", "Employee")
@@ -701,6 +773,36 @@ with st.sidebar:
         clear_entry_state()
         st.rerun()
 
+
+with st.expander("Saved Drafts", expanded=False):
+    st.caption("Save partial items as drafts, then return later when dimensions and details are ready.")
+    if st.button("Refresh Draft List"):
+        if not web_app_url:
+            st.warning("Google Sheet URL is missing from secrets.")
+        else:
+            ok, msg, drafts = list_drafts_from_google_sheet(web_app_url)
+            if ok:
+                st.session_state["draft_list"] = drafts
+                st.success(msg)
+            else:
+                st.warning(f"Could not load drafts: {msg}")
+
+    drafts = st.session_state.get("draft_list", [])
+    if drafts:
+        draft_options = [d.get("Draft_ID", "") for d in drafts if d.get("Draft_ID")]
+        selected_draft_id = st.selectbox("Select draft", draft_options)
+        selected_draft = next((d for d in drafts if d.get("Draft_ID") == selected_draft_id), None)
+        if selected_draft:
+            st.write(selected_draft)
+            if st.button("Load Selected Draft Into This Session"):
+                st.session_state["loaded_draft"] = selected_draft
+                st.session_state["form_version"] = st.session_state.get("form_version", 0) + 1
+                st.rerun()
+    else:
+        st.caption("No drafts loaded yet.")
+
+loaded_draft = st.session_state.get("loaded_draft", {})
+
 st.header("1. Upload item photos")
 photos = st.file_uploader(
     "Upload main photo plus detail photos",
@@ -720,13 +822,13 @@ if photos:
 
 st.header("2. Enter dimensions")
 c1, c2, c3 = st.columns(3)
-with c1: height = st.text_input("Height in", key=f"height_input_{form_key}")
-with c2: width = st.text_input("Width in", key=f"width_input_{form_key}")
-with c3: depth = st.text_input("Depth in", key=f"depth_input_{form_key}")
+with c1: height = st.text_input("Height in", value=str(loaded_draft.get("Height_in", "")), key=f"height_input_{form_key}")
+with c2: width = st.text_input("Width in", value=str(loaded_draft.get("Width_in", "")), key=f"width_input_{form_key}")
+with c3: depth = st.text_input("Depth in", value=str(loaded_draft.get("Depth_in", "")), key=f"depth_input_{form_key}")
 c4, c5, c6 = st.columns(3)
-with c4: diameter = st.text_input("Diameter in", key=f"diameter_input_{form_key}")
-with c5: body_height = st.text_input("Body Height in", key=f"body_height_input_{form_key}")
-with c6: seat_height = st.text_input("Seat Height in", key=f"seat_height_input_{form_key}")
+with c4: diameter = st.text_input("Diameter in", value=str(loaded_draft.get("Diameter_in", "")), key=f"diameter_input_{form_key}")
+with c5: body_height = st.text_input("Body Height in", value=str(loaded_draft.get("Body_Height_in", "")), key=f"body_height_input_{form_key}")
+with c6: seat_height = st.text_input("Seat Height in", value=str(loaded_draft.get("Seat_Height_in", "")), key=f"seat_height_input_{form_key}")
 
 dims = format_dimensions(height, width, depth, diameter, body_height, seat_height)
 if dims:
@@ -734,9 +836,55 @@ if dims:
 
 st.header("3. Add known info")
 st.caption(f"Submitted by: {current_user}")
-known_info = st.text_area("Known maker/style/materials/period", height=90, key=f"known_info_input_{form_key}")
-notes = st.text_area("Internal notes", height=90, key=f"notes_input_{form_key}")
-target_price = st.text_input("Optional target/list price", key=f"target_price_input_{form_key}")
+known_info = st.text_area("Known maker/style/materials/period", value=str(loaded_draft.get("Known_Info", "")), height=90, key=f"known_info_input_{form_key}")
+notes = st.text_area("Internal notes", value=str(loaded_draft.get("Internal_Notes", "")), height=90, key=f"notes_input_{form_key}")
+target_price = st.text_input("Optional target/list price", value=str(loaded_draft.get("Target_Price", "")), key=f"target_price_input_{form_key}")
+
+
+draft_col1, draft_col2 = st.columns([1, 2])
+with draft_col1:
+    if st.button("Save Draft", type="secondary"):
+        if not photos:
+            st.warning("Upload at least one photo before saving a draft.")
+        elif not web_app_url:
+            st.warning("Google Sheet URL is missing from Streamlit secrets.")
+        elif not c_ok:
+            st.warning("Cloudinary is not configured.")
+        else:
+            draft_id = loaded_draft.get("Draft_ID") or generate_draft_id()
+            with st.spinner("Uploading draft photos to Cloudinary..."):
+                draft_photo_urls, draft_errors = upload_draft_photos_to_cloudinary(photos, draft_id)
+            if draft_errors:
+                st.warning("Some draft photos did not upload: " + "; ".join(draft_errors))
+            draft_payload = {
+                "Draft_ID": draft_id,
+                "Status": "Draft",
+                "Submitted_By": current_user,
+                "Submitted_Date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "Photo_URLs_JSON": json.dumps(draft_photo_urls),
+                "Primary_Image_URL": draft_photo_urls[0] if draft_photo_urls else "",
+                "Height_in": height,
+                "Width_in": width,
+                "Depth_in": depth,
+                "Diameter_in": diameter,
+                "Body_Height_in": body_height,
+                "Seat_Height_in": seat_height,
+                "Dimensions": dims,
+                "Known_Info": known_info,
+                "Internal_Notes": notes,
+                "Target_Price": target_price,
+                "Last_Updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "User_Role": current_role
+            }
+            with st.spinner("Saving draft to Google Sheet..."):
+                ok, msg = save_draft_to_google_sheet(web_app_url, draft_payload)
+            if ok:
+                st.success(f"Draft saved: {draft_id}")
+            else:
+                st.error(msg)
+
+with draft_col2:
+    st.caption("Use Save Draft when you only have photos or partial notes. Come back later, add missing details, then generate and approve.")
 
 if st.button("Generate Draft Item Record", type="primary"):
     if not photos:
@@ -908,6 +1056,25 @@ if "draft" in st.session_state:
                 st.write("Before title:", entry.get("before", {}).get("title", ""))
                 st.write("After title:", entry.get("after", {}).get("title", ""))
 
+    st.subheader("Audit Trail Preview")
+    audit_preview_metrics = summarize_audit_metrics(
+        original,
+        title,
+        description,
+        normalize_price(approved_price or suggested_price),
+        len(st.session_state.get("retry_history", []))
+    )
+    a1, a2, a3, a4 = st.columns(4)
+    with a1:
+        st.metric("Retries", audit_preview_metrics["Retry_Count"])
+    with a2:
+        st.metric("Title change", f'{audit_preview_metrics["Title_Change_Score"]}%')
+    with a3:
+        st.metric("Description change", f'{audit_preview_metrics["Description_Change_Score"]}%')
+    with a4:
+        st.metric("Overall edit score", f'{audit_preview_metrics["Overall_Edit_Score"]}%')
+    st.caption("These metrics are saved to the Learning Log to show how much the AI output changed before approval.")
+
     st.subheader("Shoot List Row Preview")
     preview = pd.DataFrame([{
         "Image": "Cloudinary thumbnail will appear in Google Sheet",
@@ -942,6 +1109,13 @@ if "draft" in st.session_state:
         image_formula = f'=IMAGE("{primary_url}", 4, 120, 120)'
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
         price = normalize_price(approved_price or suggested_price)
+        audit_metrics = summarize_audit_metrics(
+            original,
+            title,
+            description,
+            price,
+            len(st.session_state.get("retry_history", []))
+        )
 
         payload = {
             "Item_ID": item_id, "Status": "Approved", "Primary_Image": image_formula,
@@ -958,7 +1132,17 @@ if "draft" in st.session_state:
             "Submitted_Date": st.session_state.get("submitted_date", now),
             "Approved_By": current_user,
             "Approved_Date": now,
-            "User_Role": current_role
+            "User_Role": current_role,
+            "Source_Draft_ID": loaded_draft.get("Draft_ID", ""),
+            "Retry_Count": len(st.session_state.get("retry_history", [])),
+            "Original_AI_Title": original.get("title", ""),
+            "Original_AI_Description": original.get("description", ""),
+            "Original_AI_Price": original.get("suggested_price_usd", ""),
+            "Final_Title_Length": audit_metrics["Final_Title_Length"],
+            "Final_Description_Word_Count": audit_metrics["Final_Description_Word_Count"],
+            "Title_Change_Score": audit_metrics["Title_Change_Score"],
+            "Description_Change_Score": audit_metrics["Description_Change_Score"],
+            "Overall_Edit_Score": audit_metrics["Overall_Edit_Score"]
         }
 
         learning_payload = {
@@ -972,11 +1156,36 @@ if "draft" in st.session_state:
             "Retry_History_JSON": json.dumps(st.session_state.get("retry_history", []), default=str),
             "Primary_Image_URL": primary_url,
             "High_Style_Brain_Matches_JSON": json.dumps(st.session_state.get("brain_matches", []), default=str),
+            "Audit_Trail_JSON": json.dumps({
+                "submitted_by": st.session_state.get("submitted_by", current_user),
+                "submitted_date": st.session_state.get("submitted_date", now),
+                "approved_by": current_user,
+                "approved_date": now,
+                "user_role": current_role,
+                "original_title": original.get("title", ""),
+                "final_title": title,
+                "original_description": original.get("description", ""),
+                "final_description": description,
+                "original_price": original.get("suggested_price_usd", ""),
+                "final_price": price,
+                "retry_count": len(st.session_state.get("retry_history", [])),
+                "metrics": audit_metrics
+            }, default=str),
             "Submitted_By": st.session_state.get("submitted_by", current_user),
             "Submitted_Date": st.session_state.get("submitted_date", now),
             "Approved_By": current_user,
             "Approved_Date": now,
-            "User_Role": current_role
+            "User_Role": current_role,
+            "Source_Draft_ID": loaded_draft.get("Draft_ID", ""),
+            "Retry_Count": len(st.session_state.get("retry_history", [])),
+            "Original_AI_Title": original.get("title", ""),
+            "Original_AI_Description": original.get("description", ""),
+            "Original_AI_Price": original.get("suggested_price_usd", ""),
+            "Final_Title_Length": audit_metrics["Final_Title_Length"],
+            "Final_Description_Word_Count": audit_metrics["Final_Description_Word_Count"],
+            "Title_Change_Score": audit_metrics["Title_Change_Score"],
+            "Description_Change_Score": audit_metrics["Description_Change_Score"],
+            "Overall_Edit_Score": audit_metrics["Overall_Edit_Score"]
         }
 
         with st.spinner("Sending final approved item to Google Sheet..."):

@@ -1,18 +1,27 @@
-# High Style AI – Inventory Intake Task 3.1.1: Hidden Google Sheet Connection
+# High Style AI – Inventory Intake Task 3.3: Draft Inventory Queue
 
-This version keeps Task 3.1 employee access and removes the need for anyone to paste the Apps Script Web App URL inside the app.
+This version keeps everything from Task 3.2 and adds draft inventory support.
 
-## What this adds
+## Kept from Task 3.2
 
-- Google Apps Script URL is stored in Streamlit Secrets
-- Sidebar now shows `Google Sheet connected`
-- Employees cannot paste the wrong URL
-- Keeps login screen
-- Keeps employee submitter / approver tracking
-- Keeps High Style Brain V5 matching
-- Keeps Cloudinary image upload
-- Keeps Google Sheet save
-- Keeps feedback retry loop and Learning_Log
+- Employee login
+- Hidden Google Apps Script URL from Streamlit secrets
+- High Style Brain V5 historical matching
+- Feedback retry loop
+- Audit Trail Preview
+- Learning metrics
+- Cloudinary image upload
+- Google Sheet save
+- Submit Another Entry reset
+
+## New in Task 3.3
+
+- Save Draft button
+- Draft photos upload to Cloudinary
+- Draft metadata saved to Google Sheets with `Action = Draft_Save`
+- Saved Drafts area
+- Optional draft loading with `Action = Draft_List`
+- Final approved inventory can carry `Source_Draft_ID`
 
 ## Required GitHub upload
 
@@ -27,27 +36,23 @@ Do not upload `__pycache__`.
 
 ## Streamlit secrets
 
-Use this format:
+Keep your existing secrets:
 
 ```toml
 OPENAI_API_KEY = "your_openai_key"
-
 CLOUDINARY_CLOUD_NAME = "your_cloud_name"
 CLOUDINARY_API_KEY = "your_cloudinary_api_key"
 CLOUDINARY_API_SECRET = "your_cloudinary_api_secret"
-
 EMPLOYEE_PASSWORD = "choose_employee_password"
 ADMIN_PASSWORD = "choose_admin_password"
-
 GOOGLE_APPS_SCRIPT_URL = "https://script.google.com/macros/s/xxxxx/exec"
 ```
 
-## Login
+## Apps Script update needed
 
-Admin:
-- Name: Paul
-- Password: your `ADMIN_PASSWORD`
+To fully use drafts, the Google Apps Script needs to support:
 
-Employee:
-- Name: employee name
-- Password: your `EMPLOYEE_PASSWORD`
+- `Action = Draft_Save`
+- `Action = Draft_List`
+
+If the script is not updated, the rest of the app still works, but draft saving/loading will not work correctly.
