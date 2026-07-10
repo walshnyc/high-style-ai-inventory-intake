@@ -33,7 +33,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Inventory Intake Task 3.3.5"
+APP_TITLE = "High Style AI – Inventory Intake Task 3.3.8"
 
 # -----------------------------
 # State / Reset
@@ -262,6 +262,116 @@ def list_drafts_from_google_sheet(url):
         return True, "Loaded drafts.", data.get("drafts", [])
     except Exception as e:
         return False, str(e), []
+
+def list_all_drafts_from_google_sheet(url):
+    """
+    Returns Active + Completed drafts.
+    Requires Apps Script support for Action = Draft_List_All.
+    """
+    url = normalize_google_script_url(url)
+    payload = {"Action": "Draft_List_All"}
+
+    try:
+        response = requests.post(
+            url,
+            data=json.dumps(payload),
+            headers={"Content-Type": "application/json"},
+            timeout=30,
+            allow_redirects=True
+        )
+
+        if response.status_code >= 400:
+            return False, f"HTTP {response.status_code}: {response.text[:500]}", []
+
+        data = response.json()
+        return True, "Loaded draft dashboard.", data.get("drafts", [])
+
+    except Exception as exc:
+        return False, str(exc), []
+
+def complete_draft_in_google_sheet(url, draft_id, completed_by):
+    """
+    Marks a saved draft as Completed so it no longer appears in Draft_List.
+    Requires Apps Script support for Action = Draft_Complete.
+    """
+    if not draft_id:
+        return True, "No source draft to complete."
+
+    url = normalize_google_script_url(url)
+    payload = {
+        "Action": "Draft_Complete",
+        "Draft_ID": draft_id,
+        "Status": "Completed",
+        "Completed_By": completed_by,
+        "Completed_Date": datetime.now().strftime("%Y-%m-%d %H:%M")
+    }
+
+    try:
+        response = requests.post(
+            url,
+            data=json.dumps(payload),
+            headers={"Content-Type": "application/json"},
+            timeout=30,
+            allow_redirects=True
+        )
+        if response.status_code >= 400:
+            return False, f"HTTP {response.status_code}: {response.text[:500]}"
+
+        try:
+            data = response.json()
+            if data.get("result") == "success":
+                return True, data.get("message", "Draft marked completed.")
+            return False, str(data)
+        except Exception:
+            text = response.text or ""
+            if "success" in text.lower():
+                return True, "Draft marked completed."
+            return False, text[:500]
+
+    except Exception as exc:
+        return False, str(exc)
+
+def delete_draft_in_google_sheet(url, draft_id, deleted_by):
+    """
+    Deletes or archives a draft through Apps Script.
+    Requires Action = Draft_Delete.
+    """
+    if not draft_id:
+        return False, "Draft ID is missing."
+
+    url = normalize_google_script_url(url)
+    payload = {
+        "Action": "Draft_Delete",
+        "Draft_ID": draft_id,
+        "Deleted_By": deleted_by,
+        "Deleted_Date": datetime.now().strftime("%Y-%m-%d %H:%M")
+    }
+
+    try:
+        response = requests.post(
+            url,
+            data=json.dumps(payload),
+            headers={"Content-Type": "application/json"},
+            timeout=30,
+            allow_redirects=True
+        )
+
+        if response.status_code >= 400:
+            return False, f"HTTP {response.status_code}: {response.text[:500]}"
+
+        try:
+            data = response.json()
+            if data.get("result") == "success":
+                return True, data.get("message", "Draft deleted.")
+            return False, str(data)
+        except Exception:
+            text = response.text or ""
+            if "success" in text.lower():
+                return True, "Draft deleted."
+            return False, text[:500]
+
+    except Exception as exc:
+        return False, str(exc)
 
 def parse_draft_photo_urls(draft):
     raw = draft.get("Photo_URLs_JSON", "")
@@ -834,6 +944,182 @@ def send_learning_log(url, payload):
     except Exception as e:
         return False, str(e)
 
+
+
+def parse_datetime_value(value):
+    text = str(value or "").strip()
+    if not text:
+        return datetime.min
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).replace(tzinfo=None)
+    except Exception:
+        return datetime.min
+
+def draft_missing_fields(draft):
+    required = {
+        "Height": draft.get("Height_in", ""),
+        "Width": draft.get("Width_in", ""),
+        "Depth": draft.get("Depth_in", ""),
+        "Known information": draft.get("Known_Info", ""),
+    }
+    return [label for label, value in required.items() if not str(value or "").strip()]
+
+def draft_readiness(draft):
+    missing = draft_missing_fields(draft)
+    has_photos = bool(parse_draft_photo_urls(draft))
+    has_known_info = bool(str(draft.get("Known_Info", "") or "").strip())
+    has_dimensions = any(
+        str(draft.get(field, "") or "").strip()
+        for field in ["Height_in", "Width_in", "Depth_in", "Diameter_in", "Body_Height_in", "Seat_Height_in"]
+    )
+
+    if not has_photos:
+        return "Needs Photos", "🔴"
+    if not has_dimensions or not has_known_info:
+        return "Needs Info", "🟡"
+    if not missing:
+        return "Ready to Generate", "🟢"
+    return "In Progress", "🟠"
+
+def draft_search_blob(draft):
+    return " ".join([
+        str(draft.get("Draft_ID", "")),
+        str(draft.get("Submitted_By", "")),
+        str(draft.get("Known_Info", "")),
+        str(draft.get("Internal_Notes", "")),
+        str(draft.get("Dimensions", "")),
+        str(draft.get("Status", "")),
+        str(draft.get("Completed_By", "")),
+        str(draft.get("Target_Price", "")),
+    ]).lower()
+
+def draft_sort_key(draft):
+    return max(
+        parse_datetime_value(draft.get("Last_Updated", "")),
+        parse_datetime_value(draft.get("Submitted_Date", "")),
+        parse_datetime_value(draft.get("Completed_Date", "")),
+    )
+
+def display_draft_card(draft, allow_load=False, allow_delete=False, key_prefix="draft"):
+    photo_urls = parse_draft_photo_urls(draft)
+    status_label, status_icon = draft_readiness(draft)
+    missing = draft_missing_fields(draft)
+
+    left, right = st.columns([1, 2])
+
+    with left:
+        if photo_urls:
+            st.image(
+                photo_urls[0],
+                caption=f"{len(photo_urls)} photo{'s' if len(photo_urls) != 1 else ''}",
+                use_container_width=True
+            )
+        else:
+            st.info("No photo available.")
+
+    with right:
+        draft_id = str(draft.get("Draft_ID", "Saved Draft") or "Saved Draft")
+        st.subheader(draft_id)
+
+        st.markdown(f"**{status_icon} {status_label}**")
+
+        submitted_by = str(draft.get("Submitted_By", "") or "").strip()
+        submitted_date = friendly_date(draft.get("Submitted_Date", ""))
+        last_updated = friendly_date(draft.get("Last_Updated", ""))
+        completed_by = str(draft.get("Completed_By", "") or "").strip()
+        completed_date = friendly_date(draft.get("Completed_Date", ""))
+        status = str(draft.get("Status", "Draft") or "Draft")
+
+        meta_parts = [f"Status: {status}"]
+        if submitted_by:
+            meta_parts.append(f"Saved by: {submitted_by}")
+        if submitted_date:
+            meta_parts.append(f"Saved: {submitted_date}")
+        if last_updated and last_updated != submitted_date:
+            meta_parts.append(f"Updated: {last_updated}")
+        if completed_by:
+            meta_parts.append(f"Completed by: {completed_by}")
+        if completed_date:
+            meta_parts.append(f"Completed: {completed_date}")
+
+        st.caption(" • ".join(meta_parts))
+
+        if missing and str(status).lower() == "draft":
+            st.warning("Still needed: " + ", ".join(missing))
+
+        summary_lines = draft_summary_lines(draft)
+        if summary_lines:
+            for label, value in summary_lines:
+                st.markdown(f"**{label}**")
+                st.write(value)
+        else:
+            st.caption("No dimensions or notes were entered.")
+
+        button_cols = st.columns(2)
+
+        if allow_load:
+            with button_cols[0]:
+                if st.button(
+                    "Continue Editing",
+                    type="primary",
+                    use_container_width=True,
+                    key=f"{key_prefix}_load_{draft_id}"
+                ):
+                    with st.spinner("Connecting saved Cloudinary photos to this draft..."):
+                        restored_photos, restore_errors = restore_draft_photos(draft)
+
+                    st.session_state["loaded_draft"] = draft
+                    st.session_state["restored_draft_photos"] = restored_photos
+                    st.session_state["restored_photo_errors"] = restore_errors
+                    st.session_state["form_version"] = st.session_state.get("form_version", 0) + 1
+                    st.session_state["uploader_version"] = st.session_state.get("uploader_version", 0) + 1
+                    st.rerun()
+
+        if allow_delete:
+            with button_cols[1]:
+                confirm_key = f"{key_prefix}_confirm_delete_{draft_id}"
+                if not st.session_state.get(confirm_key):
+                    if st.button(
+                        "Delete Draft",
+                        use_container_width=True,
+                        key=f"{key_prefix}_delete_{draft_id}"
+                    ):
+                        st.session_state[confirm_key] = True
+                        st.rerun()
+                else:
+                    st.error("Delete this draft permanently?")
+                    confirm_cols = st.columns(2)
+                    with confirm_cols[0]:
+                        if st.button(
+                            "Yes, delete",
+                            type="primary",
+                            use_container_width=True,
+                            key=f"{key_prefix}_yes_delete_{draft_id}"
+                        ):
+                            ok, message = delete_draft_in_google_sheet(
+                                web_app_url,
+                                draft_id,
+                                current_user
+                            )
+                            if ok:
+                                st.session_state["draft_dashboard_list"] = [
+                                    item for item in st.session_state.get("draft_dashboard_list", [])
+                                    if str(item.get("Draft_ID", "")) != draft_id
+                                ]
+                                st.session_state.pop(confirm_key, None)
+                                st.success("Draft deleted.")
+                                st.rerun()
+                            else:
+                                st.error(message)
+                    with confirm_cols[1]:
+                        if st.button(
+                            "Cancel",
+                            use_container_width=True,
+                            key=f"{key_prefix}_cancel_delete_{draft_id}"
+                        ):
+                            st.session_state.pop(confirm_key, None)
+                            st.rerun()
+
 # -----------------------------
 # App UI
 # -----------------------------
@@ -886,92 +1172,160 @@ with st.sidebar:
         st.rerun()
 
 
-with st.expander("Saved Drafts", expanded=False):
-    st.caption("Save partial items as drafts, then return later when dimensions and details are ready.")
-    if st.button("Refresh Draft List"):
+st.subheader("Draft Dashboard")
+
+refresh_col, count_col = st.columns([1, 3])
+with refresh_col:
+    if st.button("Refresh Draft Dashboard"):
         if not web_app_url:
             st.warning("Google Sheet URL is missing from secrets.")
         else:
-            ok, msg, drafts = list_drafts_from_google_sheet(web_app_url)
+            ok, msg, drafts = list_all_drafts_from_google_sheet(web_app_url)
             if ok:
-                st.session_state["draft_list"] = drafts
+                st.session_state["draft_dashboard_list"] = drafts
                 st.success(msg)
             else:
-                st.warning(f"Could not load drafts: {msg}")
-
-    drafts = st.session_state.get("draft_list", [])
-    if drafts:
-        def draft_option_label(draft_id):
-            draft = next((d for d in drafts if d.get("Draft_ID") == draft_id), {})
-            submitted_by = str(draft.get("Submitted_By", "") or "").strip()
-            submitted_date = friendly_date(draft.get("Submitted_Date", ""))
-            label_parts = [draft_id]
-            if submitted_by:
-                label_parts.append(submitted_by)
-            if submitted_date:
-                label_parts.append(submitted_date)
-            return " — ".join(label_parts)
-
-        draft_options = [d.get("Draft_ID", "") for d in drafts if d.get("Draft_ID")]
-        selected_draft_id = st.selectbox(
-            "Select draft",
-            draft_options,
-            format_func=draft_option_label
-        )
-        selected_draft = next((d for d in drafts if d.get("Draft_ID") == selected_draft_id), None)
-
-        if selected_draft:
-            photo_urls = parse_draft_photo_urls(selected_draft)
-            left, right = st.columns([1, 2])
-
-            with left:
-                if photo_urls:
-                    st.image(
-                        photo_urls[0],
-                        caption="Draft photo",
-                        use_container_width=True
+                # Fallback: active drafts still work even before Draft_List_All is added.
+                active_ok, active_msg, active_drafts = list_drafts_from_google_sheet(web_app_url)
+                if active_ok:
+                    st.session_state["draft_dashboard_list"] = active_drafts
+                    st.warning(
+                        "Active drafts loaded. Completed archive requires the Draft_List_All Apps Script update."
                     )
-                    if len(photo_urls) > 1:
-                        st.caption(f"{len(photo_urls)} photos saved")
                 else:
-                    st.info("No photo available for this draft.")
+                    st.warning(f"Could not load drafts: {msg}")
 
-            with right:
-                st.subheader(selected_draft.get("Draft_ID", "Saved Draft"))
+dashboard_drafts = st.session_state.get("draft_dashboard_list", [])
 
-                submitted_by = str(selected_draft.get("Submitted_By", "") or "").strip()
-                submitted_date = friendly_date(selected_draft.get("Submitted_Date", ""))
-                status = str(selected_draft.get("Status", "Draft") or "Draft")
+active_drafts = [
+    draft for draft in dashboard_drafts
+    if str(draft.get("Status", "Draft")).strip().lower() == "draft"
+]
+completed_drafts = [
+    draft for draft in dashboard_drafts
+    if str(draft.get("Status", "")).strip().lower() == "completed"
+]
 
-                meta_parts = [f"Status: {status}"]
-                if submitted_by:
-                    meta_parts.append(f"Saved by: {submitted_by}")
-                if submitted_date:
-                    meta_parts.append(f"Saved: {submitted_date}")
-                st.caption(" • ".join(meta_parts))
+with count_col:
+    metric_1, metric_2 = st.columns(2)
+    with metric_1:
+        st.metric("Active drafts", len(active_drafts))
+    with metric_2:
+        st.metric("Completed drafts", len(completed_drafts))
 
-                summary_lines = draft_summary_lines(selected_draft)
-                if summary_lines:
-                    for label, value in summary_lines:
-                        st.markdown(f"**{label}**")
-                        st.write(value)
-                else:
-                    st.caption("No dimensions or notes were entered when this draft was saved.")
+active_tab, completed_tab = st.tabs(["Active Drafts", "Completed Drafts"])
 
-                if st.button("Load This Draft", type="primary", use_container_width=True):
-                    with st.spinner("Connecting saved Cloudinary photos to this draft..."):
-                        restored_photos, restore_errors = restore_draft_photos(selected_draft)
+with active_tab:
+    st.caption("Your current inventory to-do list.")
 
-                    st.session_state["loaded_draft"] = selected_draft
-                    st.session_state["restored_draft_photos"] = restored_photos
-                    st.session_state["restored_photo_errors"] = restore_errors
-                    st.session_state["form_version"] = st.session_state.get("form_version", 0) + 1
-                    st.session_state["uploader_version"] = st.session_state.get("uploader_version", 0) + 1
-                    st.rerun()
+    if not active_drafts:
+        st.success("No active drafts. The queue is clear.")
     else:
-        st.caption("No drafts loaded yet.")
+        control_1, control_2 = st.columns([2, 1])
+        with control_1:
+            active_query = st.text_input(
+                "Search active drafts",
+                placeholder="Search by Draft ID, employee, notes, dimensions, or known information",
+                key="active_draft_search"
+            ).strip().lower()
+        with control_2:
+            active_sort = st.selectbox(
+                "Sort active drafts",
+                ["Newest first", "Oldest first", "Readiness"],
+                key="active_draft_sort"
+            )
+
+        filtered_active = active_drafts
+        if active_query:
+            filtered_active = [
+                draft for draft in active_drafts
+                if active_query in draft_search_blob(draft)
+            ]
+
+        if active_sort == "Newest first":
+            filtered_active = sorted(filtered_active, key=draft_sort_key, reverse=True)
+        elif active_sort == "Oldest first":
+            filtered_active = sorted(filtered_active, key=draft_sort_key)
+        else:
+            readiness_order = {
+                "Ready to Generate": 0,
+                "In Progress": 1,
+                "Needs Info": 2,
+                "Needs Photos": 3,
+            }
+            filtered_active = sorted(
+                filtered_active,
+                key=lambda draft: (
+                    readiness_order.get(draft_readiness(draft)[0], 9),
+                    -draft_sort_key(draft).timestamp() if draft_sort_key(draft) != datetime.min else 0
+                )
+            )
+
+        for index, draft in enumerate(filtered_active):
+            status_label, status_icon = draft_readiness(draft)
+            label = (
+                f"{status_icon} {draft.get('Draft_ID', 'Draft')} — "
+                f"{status_label} — "
+                f"{draft.get('Submitted_By', '')} — "
+                f"{friendly_date(draft.get('Last_Updated', '') or draft.get('Submitted_Date', ''))}"
+            )
+            with st.expander(label, expanded=(len(filtered_active) == 1)):
+                display_draft_card(
+                    draft,
+                    allow_load=True,
+                    allow_delete=True,
+                    key_prefix=f"active_{index}"
+                )
+
+with completed_tab:
+    st.caption("Finished drafts are kept here as a searchable archive.")
+
+    if not completed_drafts:
+        st.info("No completed drafts are available yet.")
+    else:
+        control_1, control_2 = st.columns([2, 1])
+        with control_1:
+            completed_query = st.text_input(
+                "Search completed drafts",
+                placeholder="Search by Draft ID, employee, completion date, notes, or dimensions",
+                key="completed_draft_search"
+            ).strip().lower()
+        with control_2:
+            completed_sort = st.selectbox(
+                "Sort completed drafts",
+                ["Newest completed first", "Oldest completed first"],
+                key="completed_draft_sort"
+            )
+
+        filtered_completed = completed_drafts
+        if completed_query:
+            filtered_completed = [
+                draft for draft in completed_drafts
+                if completed_query in draft_search_blob(draft)
+            ]
+
+        filtered_completed = sorted(
+            filtered_completed,
+            key=draft_sort_key,
+            reverse=(completed_sort == "Newest completed first")
+        )
+
+        for index, draft in enumerate(filtered_completed):
+            label = (
+                f"✅ {draft.get('Draft_ID', 'Draft')} — "
+                f"Completed by {draft.get('Completed_By', '')} — "
+                f"{friendly_date(draft.get('Completed_Date', ''))}"
+            )
+            with st.expander(label, expanded=False):
+                display_draft_card(
+                    draft,
+                    allow_load=False,
+                    allow_delete=False,
+                    key_prefix=f"completed_{index}"
+                )
 
 loaded_draft = st.session_state.get("loaded_draft", {})
+
 
 st.header("1. Upload item photos")
 
@@ -1409,6 +1763,41 @@ if "draft" in st.session_state:
             st.success("Feedback, retry history, and Brain matches saved to Learning_Log.")
         else:
             st.warning(f"Item saved, but learning log may not have saved: {log_msg}")
+
+        source_draft_id = str(loaded_draft.get("Draft_ID", "") or "").strip()
+        if source_draft_id:
+            with st.spinner("Marking completed draft as done..."):
+                draft_complete_ok, draft_complete_msg = complete_draft_in_google_sheet(
+                    web_app_url,
+                    source_draft_id,
+                    current_user
+                )
+
+            if draft_complete_ok:
+                st.success("Draft completed and moved to the Completed Drafts archive.")
+
+                # Update local dashboard cache immediately.
+                updated_dashboard = []
+                for cached_draft in st.session_state.get("draft_dashboard_list", []):
+                    if str(cached_draft.get("Draft_ID", "")) == source_draft_id:
+                        updated_draft = dict(cached_draft)
+                        updated_draft["Status"] = "Completed"
+                        updated_draft["Completed_By"] = current_user
+                        updated_draft["Completed_Date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                        updated_dashboard.append(updated_draft)
+                    else:
+                        updated_dashboard.append(cached_draft)
+
+                st.session_state["draft_dashboard_list"] = updated_dashboard
+
+                st.session_state.pop("loaded_draft", None)
+                st.session_state.pop("restored_draft_photos", None)
+                st.session_state.pop("restored_photo_errors", None)
+            else:
+                st.warning(
+                    "The final item was saved, but the draft could not be marked completed: "
+                    + draft_complete_msg
+                )
 
         st.session_state["last_saved"] = True
         st.rerun()

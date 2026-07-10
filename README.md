@@ -1,26 +1,47 @@
-# High Style AI – Task 3.3.5: Cloudinary URL Generation Fix
+# High Style AI – Task 3.3.8: Advanced Draft Manager
 
-This hotfix addresses the crash that occurred after loading a draft and generating through the High Style Brain.
+This version keeps all Task 3.3.7 features and adds a more polished draft-management experience.
 
-## Cause addressed
+## Active Drafts
 
-Earlier versions downloaded every restored full-resolution Cloudinary photo into Streamlit memory and then created additional image copies for AI analysis. Several large photos could overwhelm the Streamlit process while the V5 Brain was also loaded.
+- Thumbnail preview
+- Draft ID
+- Employee
+- Saved and last-updated dates
+- Readiness status:
+  - Needs Photos
+  - Needs Info
+  - In Progress
+  - Ready to Generate
+- Missing-information indicators
+- Search
+- Sort by newest, oldest, or readiness
+- Continue Editing button
+- Delete Draft button with confirmation
 
-## What changed
+## Completed Drafts
 
-- Restored draft photos remain lightweight Cloudinary URL references.
-- OpenAI analyzes the public HTTPS Cloudinary URLs directly.
-- No restored image bytes are downloaded into Streamlit memory.
-- No base64 copy is created for restored draft photos.
-- No Pillow or native image library is used for restored photos.
-- Vision analysis is capped at four photos per generation.
-- Existing Cloudinary URLs are reused for final approval and draft saving.
+- Searchable archive
+- Sort by newest or oldest completion
+- Completion employee and date
+- Friendly photo/details card
 
-## Why the app logged out
+## Apps Script actions required
 
-Streamlit login state is stored in the running process. When the process crashed, the session state was lost and the login page appeared again. Fixing the crash prevents that forced logout.
+Existing:
 
-## Upload to GitHub
+- Draft_Save
+- Draft_List
+- Draft_List_All
+- Draft_Complete
+
+New:
+
+- Draft_Delete
+
+`Draft_Delete` should find the matching `Draft_ID` in `Draft_Inventory` and delete that row, or mark it `Deleted` if you prefer an audit-safe archive.
+
+## GitHub upload
 
 Upload:
 
@@ -29,4 +50,4 @@ Upload:
 - README.md
 - data folder
 
-Then reboot the Streamlit app.
+Then reboot Streamlit.
