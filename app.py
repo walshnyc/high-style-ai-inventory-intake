@@ -33,7 +33,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Inventory Intake Task 3.3.3"
+APP_TITLE = "High Style AI – Inventory Intake Task 3.3.4"
 
 # -----------------------------
 # State / Reset
@@ -163,33 +163,47 @@ def configure_cloudinary():
     cloudinary.config(cloud_name=cloud_name, api_key=api_key, api_secret=api_secret, secure=True)
     return True, ""
 
-def safe_open_image(raw):
-    # JPEG/PNG/WebP open normally. HEIC/HEIF support is initialized lazily.
-    try:
-        return Image.open(BytesIO(raw)).convert("RGB")
-    except Exception:
+def safe_open_image(raw, filename=""):
+    # Only initialize native HEIC support when the filename indicates HEIC/HEIF.
+    lower_name = str(filename or "").lower()
+    if lower_name.endswith((".heic", ".heif")):
         ensure_heif_support()
-        return Image.open(BytesIO(raw)).convert("RGB")
+    return Image.open(BytesIO(raw)).convert("RGB")
 
 def image_to_data_url(uploaded_file):
     raw = uploaded_file.getvalue()
+
+    # Restored Cloudinary images are already normalized web images.
+    # Do not reopen them with Pillow/native image libraries.
+    if getattr(uploaded_file, "source_url", None):
+        mime_type = getattr(uploaded_file, "type", None) or "image/jpeg"
+        return f"data:{mime_type};base64," + base64.b64encode(raw).decode("utf-8")
+
+    # Newly uploaded files may need HEIC conversion/resizing.
     try:
-        img = safe_open_image(raw)
+        img = safe_open_image(raw, getattr(uploaded_file, "name", ""))
         img.thumbnail((1400, 1400))
         buf = BytesIO()
         img.save(buf, format="JPEG", quality=85)
         raw = buf.getvalue()
+        mime_type = "image/jpeg"
     except Exception:
-        pass
-    return "data:image/jpeg;base64," + base64.b64encode(raw).decode("utf-8")
+        mime_type = getattr(uploaded_file, "type", None) or "image/jpeg"
+
+    return f"data:{mime_type};base64," + base64.b64encode(raw).decode("utf-8")
 
 def upload_to_cloudinary(uploaded_file, item_id):
+    # A restored draft photo is already safely stored in Cloudinary.
+    existing_url = getattr(uploaded_file, "source_url", None)
+    if existing_url:
+        return existing_url, ""
+
     ok, msg = configure_cloudinary()
     if not ok:
         return "", msg
     raw = uploaded_file.getvalue()
     try:
-        img = safe_open_image(raw)
+        img = safe_open_image(raw, getattr(uploaded_file, "name", ""))
         img.thumbnail((1600, 1600))
         buf = BytesIO()
         img.save(buf, format="JPEG", quality=88)
@@ -266,11 +280,11 @@ def parse_draft_photo_urls(draft):
     return [primary] if primary else []
 
 class RestoredDraftPhoto(BytesIO):
-    """In-memory image that behaves like a Streamlit UploadedFile for this app."""
-    def __init__(self, content, name, source_url):
+    """In-memory Cloudinary image used without native Pillow reprocessing."""
+    def __init__(self, content, name, source_url, mime_type="image/jpeg"):
         super().__init__(content)
         self.name = name
-        self.type = "image/jpeg"
+        self.type = mime_type or "image/jpeg"
         self.size = len(content)
         self.source_url = source_url
 
@@ -289,11 +303,16 @@ def restore_draft_photos(draft):
             filename = str(url).split("/")[-1].split("?")[0] or f"draft-photo-{index}.jpg"
             if "." not in filename:
                 filename += ".jpg"
+            content_type = response.headers.get("Content-Type", "image/jpeg").split(";")[0].strip()
+            if not content_type.startswith("image/"):
+                raise ValueError(f"Cloudinary returned {content_type}, not an image")
+
             restored.append(
                 RestoredDraftPhoto(
                     response.content,
                     filename,
-                    str(url)
+                    str(url),
+                    content_type
                 )
             )
         except Exception as exc:
@@ -970,7 +989,7 @@ if restored_draft_photos:
     for i, photo in enumerate(restored_draft_photos[:8]):
         with restored_cols[i % len(restored_cols)]:
             try:
-                st.image(photo.getvalue(), caption=f"Saved photo {i+1}", use_container_width=True)
+                st.image(photo.source_url, caption=f"Saved photo {i+1}", use_container_width=True)
             except Exception:
                 st.caption(f"Saved photo {i+1}: {photo.name}")
 

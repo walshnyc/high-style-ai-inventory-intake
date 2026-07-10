@@ -1,21 +1,26 @@
-# High Style AI – Task 3.3.3: Restore Draft Photos
+# High Style AI – Task 3.3.4: Safe Draft Photo Processing
 
-This version keeps all Task 3.3.2 features and restores saved Cloudinary images when a user loads a draft.
+This hotfix addresses a Streamlit segmentation fault that occurred while generating from restored draft photos.
 
 ## What changed
 
-When the user clicks `Load This Draft`:
+- Restored Cloudinary images are no longer reopened or re-encoded with Pillow.
+- Restored image bytes are passed directly to AI as data URLs.
+- Restored images display directly from their Cloudinary URLs.
+- Final approval reuses the existing Cloudinary primary image URL instead of uploading it again.
+- HEIC native support only initializes for filenames ending in `.heic` or `.heif`.
+- Cloudinary downloads are validated to ensure they are actual image responses.
 
-- All saved Cloudinary photo URLs are downloaded into the active Streamlit session.
-- The photos appear in the main photo section.
-- The restored photos are automatically passed into High Style Brain analysis and AI generation.
-- The user does not need to re-upload the photos.
-- New photos may still be added alongside the restored photos.
-- Re-saving the draft preserves the existing Cloudinary URLs and uploads only newly added files.
+## Features retained
 
-## Streamlit limitation
-
-The browser-native file uploader cannot be programmatically populated. Instead, restored photos are displayed immediately above the upload control and are treated internally exactly like uploaded files.
+- Draft save/list/load
+- Restored draft photos
+- Friendly draft cards
+- Audit trail and learning metrics
+- High Style Brain
+- Employee login
+- Hidden Google Sheet connection
+- Feedback retry loop
 
 ## Upload to GitHub
 
@@ -26,6 +31,4 @@ Upload:
 - README.md
 - data folder
 
-Do not upload `__pycache__`.
-
-After committing, reboot the Streamlit app.
+Then reboot the Streamlit app.
