@@ -1,45 +1,27 @@
-# High Style AI – Task 3.3.8: Advanced Draft Manager
+# High Style AI – Task 3.3.9: Stable Generation Pipeline
 
-This version keeps all Task 3.3.7 features and adds a more polished draft-management experience.
+This version keeps Task 3.3.8 and reduces the largest memory/CPU spike during generation.
 
-## Active Drafts
+## What changed
 
-- Thumbnail preview
-- Draft ID
-- Employee
-- Saved and last-updated dates
-- Readiness status:
-  - Needs Photos
-  - Needs Info
-  - In Progress
-  - Ready to Generate
-- Missing-information indicators
-- Search
-- Sort by newest, oldest, or readiness
-- Continue Editing button
-- Delete Draft button with confirmation
+- Photos are analyzed once, not twice.
+- Final title/description generation uses the completed visual profile and Brain matches.
+- Visual analysis uses up to three photos.
+- Brain matching is vectorized.
+- The full 12,880-row DataFrame is no longer copied during every generation.
+- The Python row-by-row scoring loop has been removed.
+- High Style Brain matches are reduced to the six strongest references.
 
-## Completed Drafts
+## Features retained
 
-- Searchable archive
-- Sort by newest or oldest completion
-- Completion employee and date
-- Friendly photo/details card
-
-## Apps Script actions required
-
-Existing:
-
-- Draft_Save
-- Draft_List
-- Draft_List_All
-- Draft_Complete
-
-New:
-
-- Draft_Delete
-
-`Draft_Delete` should find the matching `Draft_ID` in `Draft_Inventory` and delete that row, or mark it `Deleted` if you prefer an audit-safe archive.
+- Advanced Draft Manager
+- Active and completed draft dashboards
+- Continue Editing
+- Delete Draft
+- Cloudinary URL restoration
+- Audit trail and learning metrics
+- Employee login
+- Google Sheet workflow
 
 ## GitHub upload
 

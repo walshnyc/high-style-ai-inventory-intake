@@ -33,7 +33,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Inventory Intake Task 3.3.8"
+APP_TITLE = "High Style AI – Inventory Intake Task 3.3.9"
 
 # -----------------------------
 # State / Reset
@@ -569,7 +569,7 @@ Notes:
 {notes or "None"}
 """
     content = [{"type": "text", "text": prompt}]
-    for photo in photos[:4]:
+    for photo in photos[:3]:
         content.append({"type": "image_url", "image_url": {"url": image_to_data_url(photo)}})
     try:
         resp = client.chat.completions.create(
@@ -582,80 +582,168 @@ Notes:
         return {}
 
 def find_brain_matches(df, profile, dims, known_info, notes, top_n=8):
+    """
+    Memory-conscious vectorized Brain matching.
+
+    Avoids:
+    - copying the complete V5 DataFrame
+    - Python row-by-row apply across 12,880 records
+    """
     if df.empty:
         return []
+
     seed_parts = [dims or "", known_info or "", notes or ""]
-    for k in ["item_type", "category", "style_period", "possible_maker_or_designer", "summary"]:
-        v = profile.get(k, "")
-        if isinstance(v, str):
-            seed_parts.append(v)
-    for k in ["materials", "visual_features", "reference_search_terms"]:
-        v = profile.get(k, [])
-        if isinstance(v, list):
-            seed_parts.extend([str(x) for x in v])
-    terms = tokenize(" ".join(seed_parts))
+
+    for key in [
+        "item_type",
+        "category",
+        "style_period",
+        "possible_maker_or_designer",
+        "summary"
+    ]:
+        value = profile.get(key, "")
+        if isinstance(value, str):
+            seed_parts.append(value)
+
+    for key in ["materials", "visual_features", "reference_search_terms"]:
+        value = profile.get(key, [])
+        if isinstance(value, list):
+            seed_parts.extend(str(item) for item in value)
+
+    terms = list(dict.fromkeys(tokenize(" ".join(seed_parts))))[:24]
+
     if not terms:
         return []
 
-    profile_item = str(profile.get("item_type", "")).lower()
-    profile_cat = str(profile.get("category", "")).lower()
-    profile_style = str(profile.get("style_period", "")).lower()
-    profile_mats = [str(x).lower() for x in profile.get("materials", [])] if isinstance(profile.get("materials"), list) else []
+    search = df["_brain_search"].fillna("").astype(str)
+    scores = pd.Series(0, index=df.index, dtype="int32")
 
-    def row_score(row):
-        txt = str(row.get("_brain_search", "")).lower()
-        title = (clean_cell(row.get("AI_Clean_Title", "")) or clean_cell(row.get("Item_Title", ""))).lower()
-        desc = (clean_cell(row.get("AI_Clean_Description", "")) or clean_cell(row.get("Item_Description", ""))).lower()
-        item_type = (clean_cell(row.get("AI_Item_Type", "")) or clean_cell(row.get("Inferred_Item_Type", ""))).lower()
-        cat = clean_cell(row.get("Category", "")).lower()
-        subcat = clean_cell(row.get("Subcategory", "")).lower()
-        style = (clean_cell(row.get("AI_Period_Opening", "")) or clean_cell(row.get("Style", ""))).lower()
-        mats = (clean_cell(row.get("AI_Materials_Clean", "")) + " " + clean_cell(row.get("Materials_Normalized", "")) + " " + clean_cell(row.get("Materials_Raw", ""))).lower()
-        verified = clean_cell(row.get("Verified_By_Paul", "")).lower()
-        ref_quality = clean_cell(row.get("AI_Reference_Quality", "")).lower()
+    title = (
+        df["AI_Clean_Title"].fillna("").astype(str)
+        + " "
+        + df["Item_Title"].fillna("").astype(str)
+    ).str.lower()
 
-        s = 0
-        for t in terms:
-            if t in txt: s += 1
-            if t in title: s += 5
-            if t in desc: s += 1
-            if t in item_type: s += 6
-            if t in cat or t in subcat: s += 4
-            if t in style: s += 5
-            if t in mats: s += 5
+    description = (
+        df["AI_Clean_Description"].fillna("").astype(str)
+        + " "
+        + df["Item_Description"].fillna("").astype(str)
+    ).str.lower()
 
-        if profile_item and profile_item in item_type: s += 18
-        if profile_cat and profile_cat in cat: s += 10
-        if profile_style and profile_style in style: s += 12
-        for m in profile_mats:
-            if m and m in mats: s += 8
-        if verified == "yes": s += 10
-        if "strong" in ref_quality or "high" in ref_quality: s += 4
-        if desc: s += 3
-        return s
+    item_type = (
+        df["AI_Item_Type"].fillna("").astype(str)
+        + " "
+        + df["Inferred_Item_Type"].fillna("").astype(str)
+    ).str.lower()
 
-    working = df.copy()
-    working["_match_score"] = working.apply(row_score, axis=1)
-    working = working[working["_match_score"] > 0].sort_values("_match_score", ascending=False).head(top_n)
+    category = (
+        df["Category"].fillna("").astype(str)
+        + " "
+        + df["Subcategory"].fillna("").astype(str)
+    ).str.lower()
+
+    style = (
+        df["AI_Period_Opening"].fillna("").astype(str)
+        + " "
+        + df["Style"].fillna("").astype(str)
+    ).str.lower()
+
+    materials = (
+        df["AI_Materials_Clean"].fillna("").astype(str)
+        + " "
+        + df["Materials_Normalized"].fillna("").astype(str)
+        + " "
+        + df["Materials_Raw"].fillna("").astype(str)
+    ).str.lower()
+
+    for term in terms:
+        escaped = re.escape(term)
+        scores += search.str.contains(escaped, regex=True, na=False).astype("int32")
+        scores += title.str.contains(escaped, regex=True, na=False).astype("int32") * 5
+        scores += description.str.contains(escaped, regex=True, na=False).astype("int32")
+        scores += item_type.str.contains(escaped, regex=True, na=False).astype("int32") * 6
+        scores += category.str.contains(escaped, regex=True, na=False).astype("int32") * 4
+        scores += style.str.contains(escaped, regex=True, na=False).astype("int32") * 5
+        scores += materials.str.contains(escaped, regex=True, na=False).astype("int32") * 5
+
+    profile_item = str(profile.get("item_type", "") or "").strip().lower()
+    profile_category = str(profile.get("category", "") or "").strip().lower()
+    profile_style = str(profile.get("style_period", "") or "").strip().lower()
+
+    if profile_item:
+        scores += item_type.str.contains(
+            re.escape(profile_item), regex=True, na=False
+        ).astype("int32") * 18
+
+    if profile_category:
+        scores += category.str.contains(
+            re.escape(profile_category), regex=True, na=False
+        ).astype("int32") * 10
+
+    if profile_style:
+        scores += style.str.contains(
+            re.escape(profile_style), regex=True, na=False
+        ).astype("int32") * 12
+
+    profile_materials = profile.get("materials", [])
+    if isinstance(profile_materials, list):
+        for material in profile_materials[:8]:
+            material = str(material or "").strip().lower()
+            if material:
+                scores += materials.str.contains(
+                    re.escape(material), regex=True, na=False
+                ).astype("int32") * 8
+
+    verified = df["Verified_By_Paul"].fillna("").astype(str).str.lower()
+    quality = df["AI_Reference_Quality"].fillna("").astype(str).str.lower()
+
+    scores += verified.eq("yes").astype("int32") * 10
+    scores += quality.str.contains("strong|high", regex=True, na=False).astype("int32") * 4
+    scores += description.ne("").astype("int32") * 3
+
+    positive_scores = scores[scores > 0]
+    if positive_scores.empty:
+        return []
+
+    top_indexes = positive_scores.nlargest(top_n).index
 
     matches = []
-    for _, r in working.iterrows():
-        title = clean_cell(r.get("AI_Clean_Title", "")) or clean_cell(r.get("Item_Title", ""))
-        desc = clean_cell(r.get("AI_Clean_Description", "")) or clean_cell(r.get("Item_Description", ""))
+    for index in top_indexes:
+        row = df.loc[index]
+        clean_title = (
+            clean_cell(row.get("AI_Clean_Title", ""))
+            or clean_cell(row.get("Item_Title", ""))
+        )
+        clean_description = (
+            clean_cell(row.get("AI_Clean_Description", ""))
+            or clean_cell(row.get("Item_Description", ""))
+        )
+
         matches.append({
-            "match_score": int(r.get("_match_score", 0)),
-            "title": title[:250],
-            "description": desc[:1200],
-            "category": clean_cell(r.get("Category", "")),
-            "subcategory": clean_cell(r.get("Subcategory", "")),
-            "item_type": clean_cell(r.get("AI_Item_Type", "")) or clean_cell(r.get("Inferred_Item_Type", "")),
-            "style": clean_cell(r.get("AI_Period_Opening", "")) or clean_cell(r.get("Style", "")),
-            "materials": clean_cell(r.get("AI_Materials_Clean", "")) or clean_cell(r.get("Materials_Normalized", "")) or clean_cell(r.get("Materials_Raw", "")),
-            "maker": clean_cell(r.get("Designer_or_Maker", "")),
-            "list_price": clean_cell(r.get("Original_List_Price_USD", "")),
-            "net_price": clean_cell(r.get("Actual_Net_Sale_Price_USD", "")),
-            "verified_by_paul": clean_cell(r.get("Verified_By_Paul", "")),
+            "match_score": int(scores.loc[index]),
+            "title": clean_title[:250],
+            "description": clean_description[:1200],
+            "category": clean_cell(row.get("Category", "")),
+            "subcategory": clean_cell(row.get("Subcategory", "")),
+            "item_type": (
+                clean_cell(row.get("AI_Item_Type", ""))
+                or clean_cell(row.get("Inferred_Item_Type", ""))
+            ),
+            "style": (
+                clean_cell(row.get("AI_Period_Opening", ""))
+                or clean_cell(row.get("Style", ""))
+            ),
+            "materials": (
+                clean_cell(row.get("AI_Materials_Clean", ""))
+                or clean_cell(row.get("Materials_Normalized", ""))
+                or clean_cell(row.get("Materials_Raw", ""))
+            ),
+            "maker": clean_cell(row.get("Designer_or_Maker", "")),
+            "list_price": clean_cell(row.get("Original_List_Price_USD", "")),
+            "net_price": clean_cell(row.get("Actual_Net_Sale_Price_USD", "")),
+            "verified_by_paul": clean_cell(row.get("Verified_By_Paul", "")),
         })
+
     return matches
 
 # -----------------------------
@@ -814,27 +902,53 @@ Target price:
 """
 
 def generate_draft(photos, dims, notes, known_info, target_price, brain_matches=None, brain_profile=None):
+    """
+    Final writing call is text-only.
+
+    Photos were already analyzed by quick_image_profile(), so resending them
+    here would duplicate the largest request and memory workload.
+    """
     client = get_openai_client()
     if client is None:
         return {"error": "No OPENAI_API_KEY found.", "draft": {}}
 
-    content = [{"type": "text", "text": base_prompt(dims, notes, known_info, target_price, brain_matches, brain_profile)}]
-    for photo in photos[:4]:
-        content.append({"type": "image_url", "image_url": {"url": image_to_data_url(photo)}})
+    prompt = base_prompt(
+        dims,
+        notes,
+        known_info,
+        target_price,
+        brain_matches,
+        brain_profile
+    )
 
     try:
         resp = client.chat.completions.create(
             model="gpt-4.1-mini",
-            messages=[{"role": "user", "content": content}],
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
             temperature=0.2
         )
+
         draft = parse_json(resp.choices[0].message.content)
         draft["title"] = enforce_title(draft.get("title", ""))
+
         if "dimensions_formatted" not in draft:
             draft["dimensions_formatted"] = dims
-        return {"error": "", "draft": draft}
-    except Exception as e:
-        return {"error": str(e), "draft": {}}
+
+        return {
+            "error": "",
+            "draft": draft
+        }
+
+    except Exception as exc:
+        return {
+            "error": str(exc),
+            "draft": {}
+        }
 
 def retry_with_feedback(current_draft, feedback_context, dims, notes, known_info, target_price):
     client = get_openai_client()
@@ -1456,7 +1570,7 @@ if st.button("Generate Draft Item Record", type="primary"):
         brain_profile = quick_image_profile(photos, dims, known_info, notes)
 
     with st.spinner("Searching High Style Brain V5 for similar historical records..."):
-        brain_matches = find_brain_matches(brain_df, brain_profile, dims, known_info, notes, top_n=8)
+        brain_matches = find_brain_matches(brain_df, brain_profile, dims, known_info, notes, top_n=6)
 
     st.session_state["brain_profile"] = brain_profile
     st.session_state["brain_matches"] = brain_matches
