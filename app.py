@@ -33,7 +33,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Inventory Intake Task 3.3.1"
+APP_TITLE = "High Style AI – Inventory Intake Task 3.3.2"
 
 # -----------------------------
 # State / Reset
@@ -248,6 +248,53 @@ def list_drafts_from_google_sheet(url):
         return True, "Loaded drafts.", data.get("drafts", [])
     except Exception as e:
         return False, str(e), []
+
+def parse_draft_photo_urls(draft):
+    raw = draft.get("Photo_URLs_JSON", "")
+    if isinstance(raw, list):
+        return [str(x) for x in raw if x]
+    if not raw:
+        primary = draft.get("Primary_Image_URL", "")
+        return [primary] if primary else []
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return [str(x) for x in parsed if x]
+    except Exception:
+        pass
+    primary = draft.get("Primary_Image_URL", "")
+    return [primary] if primary else []
+
+def friendly_date(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        cleaned = text.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(cleaned)
+        return dt.strftime("%b %-d, %Y at %-I:%M %p")
+    except Exception:
+        return text
+
+def draft_summary_lines(draft):
+    lines = []
+    dims = str(draft.get("Dimensions", "") or "").strip()
+    if dims:
+        lines.append(("Dimensions", dims))
+
+    known = str(draft.get("Known_Info", "") or "").strip()
+    if known:
+        lines.append(("Known information", known))
+
+    notes = str(draft.get("Internal_Notes", "") or "").strip()
+    if notes:
+        lines.append(("Internal notes", notes))
+
+    price = str(draft.get("Target_Price", "") or "").strip()
+    if price:
+        lines.append(("Target price", price))
+
+    return lines
 
 # -----------------------------
 # High Style Brain
@@ -803,15 +850,67 @@ with st.expander("Saved Drafts", expanded=False):
 
     drafts = st.session_state.get("draft_list", [])
     if drafts:
+        def draft_option_label(draft_id):
+            draft = next((d for d in drafts if d.get("Draft_ID") == draft_id), {})
+            submitted_by = str(draft.get("Submitted_By", "") or "").strip()
+            submitted_date = friendly_date(draft.get("Submitted_Date", ""))
+            label_parts = [draft_id]
+            if submitted_by:
+                label_parts.append(submitted_by)
+            if submitted_date:
+                label_parts.append(submitted_date)
+            return " — ".join(label_parts)
+
         draft_options = [d.get("Draft_ID", "") for d in drafts if d.get("Draft_ID")]
-        selected_draft_id = st.selectbox("Select draft", draft_options)
+        selected_draft_id = st.selectbox(
+            "Select draft",
+            draft_options,
+            format_func=draft_option_label
+        )
         selected_draft = next((d for d in drafts if d.get("Draft_ID") == selected_draft_id), None)
+
         if selected_draft:
-            st.write(selected_draft)
-            if st.button("Load Selected Draft Into This Session"):
-                st.session_state["loaded_draft"] = selected_draft
-                st.session_state["form_version"] = st.session_state.get("form_version", 0) + 1
-                st.rerun()
+            photo_urls = parse_draft_photo_urls(selected_draft)
+            left, right = st.columns([1, 2])
+
+            with left:
+                if photo_urls:
+                    st.image(
+                        photo_urls[0],
+                        caption="Draft photo",
+                        use_container_width=True
+                    )
+                    if len(photo_urls) > 1:
+                        st.caption(f"{len(photo_urls)} photos saved")
+                else:
+                    st.info("No photo available for this draft.")
+
+            with right:
+                st.subheader(selected_draft.get("Draft_ID", "Saved Draft"))
+
+                submitted_by = str(selected_draft.get("Submitted_By", "") or "").strip()
+                submitted_date = friendly_date(selected_draft.get("Submitted_Date", ""))
+                status = str(selected_draft.get("Status", "Draft") or "Draft")
+
+                meta_parts = [f"Status: {status}"]
+                if submitted_by:
+                    meta_parts.append(f"Saved by: {submitted_by}")
+                if submitted_date:
+                    meta_parts.append(f"Saved: {submitted_date}")
+                st.caption(" • ".join(meta_parts))
+
+                summary_lines = draft_summary_lines(selected_draft)
+                if summary_lines:
+                    for label, value in summary_lines:
+                        st.markdown(f"**{label}**")
+                        st.write(value)
+                else:
+                    st.caption("No dimensions or notes were entered when this draft was saved.")
+
+                if st.button("Load This Draft", type="primary", use_container_width=True):
+                    st.session_state["loaded_draft"] = selected_draft
+                    st.session_state["form_version"] = st.session_state.get("form_version", 0) + 1
+                    st.rerun()
     else:
         st.caption("No drafts loaded yet.")
 

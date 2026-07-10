@@ -1,21 +1,24 @@
-# High Style AI – Task 3.3.1: Streamlit Startup Stability Fix
+# High Style AI – Task 3.3.2: Friendly Draft Cards
 
-This hotfix keeps all Task 3.3 features and addresses the Streamlit Community Cloud startup segmentation fault.
+This version keeps all Task 3.3.1 features and replaces the raw draft JSON display with a clean, employee-friendly draft view.
 
 ## What changed
 
-- Pins Python package versions instead of installing unpredictable latest releases
-- Pins `pillow-heif==0.13.0`
-- Pins `pillow==10.4.0`
-- Loads the native HEIC plugin only when an image needs it
-- Keeps:
-  - Draft Inventory Queue
-  - Audit trail and learning metrics
-  - Employee login
-  - Hidden Google Sheet connection
-  - High Style Brain
-  - Cloudinary
-  - Feedback retry loop
+Each selected draft now shows:
+
+- One uploaded photo
+- Number of photos saved
+- Draft ID
+- Status
+- Saved by
+- Date saved
+- Dimensions, when entered
+- Known information, when entered
+- Internal notes, when entered
+- Target price, when entered
+- A clear `Load This Draft` button
+
+Raw JSON/code is no longer shown.
 
 ## Upload to GitHub
 
@@ -28,11 +31,4 @@ Upload:
 
 Do not upload `__pycache__`.
 
-## Streamlit
-
-After committing the files:
-
-1. Open the app in Streamlit Community Cloud.
-2. Open Manage app.
-3. Reboot the app.
-4. Watch the logs until the app reaches Running.
+After committing, reboot the Streamlit app.
