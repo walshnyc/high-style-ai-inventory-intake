@@ -33,7 +33,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Inventory Intake Task 3.3.4"
+APP_TITLE = "High Style AI – Inventory Intake Task 3.3.5"
 
 # -----------------------------
 # State / Reset
@@ -171,13 +171,13 @@ def safe_open_image(raw, filename=""):
     return Image.open(BytesIO(raw)).convert("RGB")
 
 def image_to_data_url(uploaded_file):
-    raw = uploaded_file.getvalue()
+    # Restored draft photos stay as lightweight public Cloudinary URLs.
+    # OpenAI can analyze HTTPS image URLs directly, avoiding large memory copies.
+    source_url = getattr(uploaded_file, "source_url", None)
+    if source_url:
+        return str(source_url)
 
-    # Restored Cloudinary images are already normalized web images.
-    # Do not reopen them with Pillow/native image libraries.
-    if getattr(uploaded_file, "source_url", None):
-        mime_type = getattr(uploaded_file, "type", None) or "image/jpeg"
-        return f"data:{mime_type};base64," + base64.b64encode(raw).decode("utf-8")
+    raw = uploaded_file.getvalue()
 
     # Newly uploaded files may need HEIC conversion/resizing.
     try:
@@ -279,17 +279,17 @@ def parse_draft_photo_urls(draft):
     primary = draft.get("Primary_Image_URL", "")
     return [primary] if primary else []
 
-class RestoredDraftPhoto(BytesIO):
-    """In-memory Cloudinary image used without native Pillow reprocessing."""
-    def __init__(self, content, name, source_url, mime_type="image/jpeg"):
-        super().__init__(content)
+class RestoredDraftPhoto:
+    """Lightweight reference to a photo already stored in Cloudinary."""
+    def __init__(self, name, source_url, mime_type="image/jpeg"):
         self.name = name
         self.type = mime_type or "image/jpeg"
-        self.size = len(content)
+        self.size = 0
         self.source_url = source_url
 
     def getvalue(self):
-        return super().getvalue()
+        # Restored images are intentionally not downloaded into Streamlit memory.
+        return b""
 
 def restore_draft_photos(draft):
     photo_urls = parse_draft_photo_urls(draft)
@@ -297,26 +297,22 @@ def restore_draft_photos(draft):
     errors = []
 
     for index, url in enumerate(photo_urls, 1):
-        try:
-            response = requests.get(str(url), timeout=30)
-            response.raise_for_status()
-            filename = str(url).split("/")[-1].split("?")[0] or f"draft-photo-{index}.jpg"
-            if "." not in filename:
-                filename += ".jpg"
-            content_type = response.headers.get("Content-Type", "image/jpeg").split(";")[0].strip()
-            if not content_type.startswith("image/"):
-                raise ValueError(f"Cloudinary returned {content_type}, not an image")
+        clean_url = str(url or "").strip()
+        if not clean_url.startswith(("https://", "http://")):
+            errors.append(f"Photo {index}: invalid Cloudinary URL")
+            continue
 
-            restored.append(
-                RestoredDraftPhoto(
-                    response.content,
-                    filename,
-                    str(url),
-                    content_type
-                )
+        filename = clean_url.split("/")[-1].split("?")[0] or f"draft-photo-{index}.jpg"
+        if "." not in filename:
+            filename += ".jpg"
+
+        restored.append(
+            RestoredDraftPhoto(
+                filename,
+                clean_url,
+                "image/jpeg"
             )
-        except Exception as exc:
-            errors.append(f"Photo {index}: {exc}")
+        )
 
     return restored, errors
 
@@ -713,7 +709,7 @@ def generate_draft(photos, dims, notes, known_info, target_price, brain_matches=
         return {"error": "No OPENAI_API_KEY found.", "draft": {}}
 
     content = [{"type": "text", "text": base_prompt(dims, notes, known_info, target_price, brain_matches, brain_profile)}]
-    for photo in photos:
+    for photo in photos[:4]:
         content.append({"type": "image_url", "image_url": {"url": image_to_data_url(photo)}})
 
     try:
@@ -963,7 +959,7 @@ with st.expander("Saved Drafts", expanded=False):
                     st.caption("No dimensions or notes were entered when this draft was saved.")
 
                 if st.button("Load This Draft", type="primary", use_container_width=True):
-                    with st.spinner("Restoring saved photos from Cloudinary..."):
+                    with st.spinner("Connecting saved Cloudinary photos to this draft..."):
                         restored_photos, restore_errors = restore_draft_photos(selected_draft)
 
                     st.session_state["loaded_draft"] = selected_draft
