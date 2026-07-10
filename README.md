@@ -1,35 +1,13 @@
-# High Style AI – Task 3.3.9: Stable Generation Pipeline
+# High Style AI – Task 3.4.1: Smart Brain Index
 
-This version keeps Task 3.3.8 and reduces the largest memory/CPU spike during generation.
+The live app now uses a compact metadata database, compressed token shards,
+and compressed full-record chunks.
 
-## What changed
+- Historical records: 12,880
+- Record chunks: 18
+- Token shards: 36
+- No Excel, pandas, openpyxl, or pillow-heif at runtime
+- Only selected historical descriptions are decompressed
 
-- Photos are analyzed once, not twice.
-- Final title/description generation uses the completed visual profile and Brain matches.
-- Visual analysis uses up to three photos.
-- Brain matching is vectorized.
-- The full 12,880-row DataFrame is no longer copied during every generation.
-- The Python row-by-row scoring loop has been removed.
-- High Style Brain matches are reduced to the six strongest references.
-
-## Features retained
-
-- Advanced Draft Manager
-- Active and completed draft dashboards
-- Continue Editing
-- Delete Draft
-- Cloudinary URL restoration
-- Audit trail and learning metrics
-- Employee login
-- Google Sheet workflow
-
-## GitHub upload
-
-Upload:
-
-- app.py
-- requirements.txt
-- README.md
-- data folder
-
-Then reboot Streamlit.
+Upload `app.py`, `requirements.txt`, `README.md`, and the complete `data` folder.
+Every individual file is below GitHub's 25 MB browser-upload limit.

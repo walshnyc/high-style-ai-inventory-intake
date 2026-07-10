@@ -1,26 +1,10 @@
-import os, json, re, base64, uuid, tempfile, glob
+import os, json, re, base64, uuid, tempfile, sqlite3, gzip
 from io import BytesIO
 from datetime import datetime
 
-import pandas as pd
 import streamlit as st
 from PIL import Image
 import requests
-
-HEIF_INITIALIZED = False
-
-def ensure_heif_support():
-    """Load the native HEIC plugin only when an image actually needs it."""
-    global HEIF_INITIALIZED
-    if HEIF_INITIALIZED:
-        return True
-    try:
-        from pillow_heif import register_heif_opener
-        register_heif_opener()
-        HEIF_INITIALIZED = True
-        return True
-    except Exception:
-        return False
 
 try:
     from openai import OpenAI
@@ -33,7 +17,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Inventory Intake Task 3.3.9"
+APP_TITLE = "High Style AI – Inventory Intake Task 3.4.1"
 
 # -----------------------------
 # State / Reset
@@ -164,10 +148,6 @@ def configure_cloudinary():
     return True, ""
 
 def safe_open_image(raw, filename=""):
-    # Only initialize native HEIC support when the filename indicates HEIC/HEIF.
-    lower_name = str(filename or "").lower()
-    if lower_name.endswith((".heic", ".heif")):
-        ensure_heif_support()
     return Image.open(BytesIO(raw)).convert("RGB")
 
 def image_to_data_url(uploaded_file):
@@ -458,90 +438,40 @@ def draft_summary_lines(draft):
     return lines
 
 # -----------------------------
-# High Style Brain
+# High Style Brain — Smart Index
 # -----------------------------
 
-def clean_cell(x):
-    if pd.isna(x):
-        return ""
-    return str(x).strip()
+BRAIN_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+BRAIN_INDEX_PATH = os.path.join(BRAIN_DATA_DIR, "brain_index.sqlite")
 
-@st.cache_data(show_spinner=False)
-def load_high_style_brain():
-    paths = []
-    for folder in ["data", "."]:
-        if os.path.exists(folder):
-            paths.extend(glob.glob(os.path.join(folder, "*.xlsx")))
-    preferred = [
-        p for p in paths
-        if "v5" in os.path.basename(p).lower()
-        and ("ai_ready" in os.path.basename(p).lower() or "verified" in os.path.basename(p).lower() or "verification" in os.path.basename(p).lower())
-    ]
-    files = preferred or paths
-    if not files:
-        return pd.DataFrame(), ""
-
-    path = files[0]
-    try:
-        xls = pd.ExcelFile(path)
-        sheet_priority = ["Master_Data_V5", "Master_Data", "Low_Confidence_Review"]
-        sheet = next((s for s in sheet_priority if s in xls.sheet_names), xls.sheet_names[0])
-        df = pd.read_excel(path, sheet_name=sheet, dtype=object).dropna(how="all")
-    except Exception as e:
-        st.warning(f"Could not load High Style Brain file: {e}")
-        return pd.DataFrame(), ""
-
-    needed = [
-        "Item_Title", "Item_Description", "AI_Clean_Title", "AI_Clean_Description",
-        "Designer_or_Maker", "Category", "Subcategory", "Inferred_Item_Type",
-        "AI_Item_Type", "Style", "AI_Period_Opening", "Approx_Year_or_Period",
-        "Decade", "Country_of_Origin", "Materials_Normalized", "AI_Materials_Clean",
-        "Materials_Raw", "AI_Search_Keywords", "AI_Search_Text", "Comparable_Key",
-        "Original_List_Price_USD", "Actual_Net_Sale_Price_USD",
-        "AI_Reference_Quality", "AI_Reference_Score", "Verified_By_Paul"
-    ]
-    for c in needed:
-        if c not in df.columns:
-            df[c] = ""
-
-    df["_brain_search"] = (
-        df["Item_Title"].apply(clean_cell) + " | " +
-        df["Item_Description"].apply(clean_cell) + " | " +
-        df["AI_Clean_Title"].apply(clean_cell) + " | " +
-        df["AI_Clean_Description"].apply(clean_cell) + " | " +
-        df["Designer_or_Maker"].apply(clean_cell) + " | " +
-        df["Category"].apply(clean_cell) + " | " +
-        df["Subcategory"].apply(clean_cell) + " | " +
-        df["Inferred_Item_Type"].apply(clean_cell) + " | " +
-        df["AI_Item_Type"].apply(clean_cell) + " | " +
-        df["Style"].apply(clean_cell) + " | " +
-        df["AI_Period_Opening"].apply(clean_cell) + " | " +
-        df["Approx_Year_or_Period"].apply(clean_cell) + " | " +
-        df["Decade"].apply(clean_cell) + " | " +
-        df["Materials_Normalized"].apply(clean_cell) + " | " +
-        df["AI_Materials_Clean"].apply(clean_cell) + " | " +
-        df["Materials_Raw"].apply(clean_cell) + " | " +
-        df["AI_Search_Keywords"].apply(clean_cell) + " | " +
-        df["AI_Search_Text"].apply(clean_cell) + " | " +
-        df["Comparable_Key"].apply(clean_cell)
-    ).str.lower()
-
-    return df, os.path.basename(path)
-
-STOPWORDS = set("""
-the and with for from this that pair set one two three large small rare vintage antique circa style modern beautiful fine decorative possibly likely
-piece pieces table chair chairs lighting lamp lamps chandelier sconces mirror mirrors cabinet high style deco
-""".split())
+STOPWORDS = {
+    "the", "and", "with", "for", "from", "this", "that", "pair", "set",
+    "one", "two", "three", "large", "small", "rare", "vintage", "antique",
+    "circa", "style", "modern", "beautiful", "fine", "decorative",
+    "possibly", "likely", "piece", "pieces", "high", "deco"
+}
 
 def tokenize(text):
-    text = str(text or "").lower()
-    text = re.sub(r"[^a-z0-9\s\-]", " ", text)
-    return [w for w in text.split() if len(w) > 2 and w not in STOPWORDS]
+    words = re.findall(r"[a-z0-9]+", str(text or "").lower())
+    return [word for word in words if len(word) > 2 and word not in STOPWORDS]
+
+def brain_status():
+    if not os.path.exists(BRAIN_INDEX_PATH):
+        return False, "Smart Brain index is missing."
+    try:
+        with sqlite3.connect(BRAIN_INDEX_PATH) as connection:
+            count = connection.execute(
+                "SELECT COUNT(*) FROM brain_index"
+            ).fetchone()[0]
+        return True, f"Smart Brain loaded ({count:,} historical records)"
+    except Exception as exc:
+        return False, f"Smart Brain error: {exc}"
 
 def quick_image_profile(photos, dims, known_info, notes):
     client = get_openai_client()
     if client is None:
         return {}
+
     schema = {
         "item_type": "specific object type",
         "category": "Lighting/Tables/Seating/Case Pieces/Accessories/Art/Mirrors",
@@ -552,6 +482,7 @@ def quick_image_profile(photos, dims, known_info, notes):
         "reference_search_terms": ["term 1", "term 2", "term 3"],
         "summary": "short internal summary"
     }
+
     prompt = f"""
 Analyze these item photos for High Style Deco.
 Return ONLY valid JSON with this schema:
@@ -568,180 +499,193 @@ Known info:
 Notes:
 {notes or "None"}
 """
+
     content = [{"type": "text", "text": prompt}]
     for photo in photos[:3]:
-        content.append({"type": "image_url", "image_url": {"url": image_to_data_url(photo)}})
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": image_to_data_url(photo)}
+        })
+
     try:
-        resp = client.chat.completions.create(
+        response = client.chat.completions.create(
             model="gpt-4.1-mini",
             messages=[{"role": "user", "content": content}],
             temperature=0.1
         )
-        return parse_json(resp.choices[0].message.content)
+        return parse_json(response.choices[0].message.content)
     except Exception:
         return {}
 
-def find_brain_matches(df, profile, dims, known_info, notes, top_n=8):
-    """
-    Memory-conscious vectorized Brain matching.
-
-    Avoids:
-    - copying the complete V5 DataFrame
-    - Python row-by-row apply across 12,880 records
-    """
-    if df.empty:
-        return []
-
-    seed_parts = [dims or "", known_info or "", notes or ""]
-
+def build_brain_terms(profile, dims, known_info, notes):
+    parts = [dims or "", known_info or "", notes or ""]
     for key in [
-        "item_type",
-        "category",
-        "style_period",
-        "possible_maker_or_designer",
-        "summary"
+        "item_type", "category", "style_period",
+        "possible_maker_or_designer", "summary"
     ]:
         value = profile.get(key, "")
         if isinstance(value, str):
-            seed_parts.append(value)
+            parts.append(value)
 
     for key in ["materials", "visual_features", "reference_search_terms"]:
         value = profile.get(key, [])
         if isinstance(value, list):
-            seed_parts.extend(str(item) for item in value)
+            parts.extend(str(item) for item in value)
 
-    terms = list(dict.fromkeys(tokenize(" ".join(seed_parts))))[:24]
+    unique = []
+    for term in tokenize(" ".join(parts)):
+        if term not in unique:
+            unique.append(term)
+    return unique[:16]
 
+@st.cache_data(show_spinner=False)
+def load_token_shard(shard):
+    path = os.path.join(BRAIN_DATA_DIR, f"brain_tokens_{shard}.json.gz")
+    if not os.path.exists(path):
+        return {}
+    with gzip.open(path, "rt", encoding="utf-8") as handle:
+        return json.load(handle)
+
+def candidate_record_ids(terms, limit=160):
+    scores = {}
+    for term in terms:
+        shard = term[0].lower() if term and term[0].isalnum() else "_"
+        postings = load_token_shard(shard).get(term, [])
+        for record_id in postings:
+            rid = int(record_id)
+            scores[rid] = scores.get(rid, 0) + 1
+
+    ranked = sorted(scores.items(), key=lambda pair: pair[1], reverse=True)
+    return [record_id for record_id, _ in ranked[:limit]]
+
+@st.cache_data(show_spinner=False)
+def load_record_chunk(chunk_id):
+    path = os.path.join(
+        BRAIN_DATA_DIR,
+        f"brain_records_{int(chunk_id):03d}.json.gz"
+    )
+    if not os.path.exists(path):
+        return []
+    with gzip.open(path, "rt", encoding="utf-8") as handle:
+        return json.load(handle)
+
+def find_brain_matches(profile, dims, known_info, notes, top_n=6):
+    if not os.path.exists(BRAIN_INDEX_PATH):
+        return []
+
+    terms = build_brain_terms(profile, dims, known_info, notes)
     if not terms:
         return []
 
-    search = df["_brain_search"].fillna("").astype(str)
-    scores = pd.Series(0, index=df.index, dtype="int32")
-
-    title = (
-        df["AI_Clean_Title"].fillna("").astype(str)
-        + " "
-        + df["Item_Title"].fillna("").astype(str)
-    ).str.lower()
-
-    description = (
-        df["AI_Clean_Description"].fillna("").astype(str)
-        + " "
-        + df["Item_Description"].fillna("").astype(str)
-    ).str.lower()
-
-    item_type = (
-        df["AI_Item_Type"].fillna("").astype(str)
-        + " "
-        + df["Inferred_Item_Type"].fillna("").astype(str)
-    ).str.lower()
-
-    category = (
-        df["Category"].fillna("").astype(str)
-        + " "
-        + df["Subcategory"].fillna("").astype(str)
-    ).str.lower()
-
-    style = (
-        df["AI_Period_Opening"].fillna("").astype(str)
-        + " "
-        + df["Style"].fillna("").astype(str)
-    ).str.lower()
-
-    materials = (
-        df["AI_Materials_Clean"].fillna("").astype(str)
-        + " "
-        + df["Materials_Normalized"].fillna("").astype(str)
-        + " "
-        + df["Materials_Raw"].fillna("").astype(str)
-    ).str.lower()
-
-    for term in terms:
-        escaped = re.escape(term)
-        scores += search.str.contains(escaped, regex=True, na=False).astype("int32")
-        scores += title.str.contains(escaped, regex=True, na=False).astype("int32") * 5
-        scores += description.str.contains(escaped, regex=True, na=False).astype("int32")
-        scores += item_type.str.contains(escaped, regex=True, na=False).astype("int32") * 6
-        scores += category.str.contains(escaped, regex=True, na=False).astype("int32") * 4
-        scores += style.str.contains(escaped, regex=True, na=False).astype("int32") * 5
-        scores += materials.str.contains(escaped, regex=True, na=False).astype("int32") * 5
-
-    profile_item = str(profile.get("item_type", "") or "").strip().lower()
-    profile_category = str(profile.get("category", "") or "").strip().lower()
-    profile_style = str(profile.get("style_period", "") or "").strip().lower()
-
-    if profile_item:
-        scores += item_type.str.contains(
-            re.escape(profile_item), regex=True, na=False
-        ).astype("int32") * 18
-
-    if profile_category:
-        scores += category.str.contains(
-            re.escape(profile_category), regex=True, na=False
-        ).astype("int32") * 10
-
-    if profile_style:
-        scores += style.str.contains(
-            re.escape(profile_style), regex=True, na=False
-        ).astype("int32") * 12
-
-    profile_materials = profile.get("materials", [])
-    if isinstance(profile_materials, list):
-        for material in profile_materials[:8]:
-            material = str(material or "").strip().lower()
-            if material:
-                scores += materials.str.contains(
-                    re.escape(material), regex=True, na=False
-                ).astype("int32") * 8
-
-    verified = df["Verified_By_Paul"].fillna("").astype(str).str.lower()
-    quality = df["AI_Reference_Quality"].fillna("").astype(str).str.lower()
-
-    scores += verified.eq("yes").astype("int32") * 10
-    scores += quality.str.contains("strong|high", regex=True, na=False).astype("int32") * 4
-    scores += description.ne("").astype("int32") * 3
-
-    positive_scores = scores[scores > 0]
-    if positive_scores.empty:
+    record_ids = candidate_record_ids(terms)
+    if not record_ids:
         return []
 
-    top_indexes = positive_scores.nlargest(top_n).index
+    placeholders = ",".join("?" for _ in record_ids)
+    query = f"""
+        SELECT *
+        FROM brain_index
+        WHERE record_id IN ({placeholders})
+    """
+
+    with sqlite3.connect(BRAIN_INDEX_PATH) as connection:
+        connection.row_factory = sqlite3.Row
+        candidates = connection.execute(query, record_ids).fetchall()
+
+    profile_item = str(profile.get("item_type", "") or "").lower()
+    profile_category = str(profile.get("category", "") or "").lower()
+    profile_style = str(profile.get("style_period", "") or "").lower()
+    profile_materials = [
+        str(value or "").lower()
+        for value in profile.get("materials", [])[:6]
+        if str(value or "").strip()
+    ]
+
+    scored = []
+    for candidate in candidates:
+        title = str(candidate["title"] or "").lower()
+        category = str(candidate["category"] or "").lower()
+        subcategory = str(candidate["subcategory"] or "").lower()
+        item_type = str(candidate["item_type"] or "").lower()
+        style = str(candidate["style"] or "").lower()
+        materials = str(candidate["materials"] or "").lower()
+        maker = str(candidate["maker"] or "").lower()
+
+        score = 0
+        for term in terms:
+            if term in title:
+                score += 5
+            if term in item_type:
+                score += 6
+            if term in category or term in subcategory:
+                score += 4
+            if term in style:
+                score += 5
+            if term in materials:
+                score += 5
+            if term in maker:
+                score += 4
+
+        if profile_item and profile_item in item_type:
+            score += 18
+        if profile_category and (
+            profile_category in category or profile_category in subcategory
+        ):
+            score += 10
+        if profile_style and profile_style in style:
+            score += 12
+
+        for material in profile_materials:
+            if material in materials:
+                score += 8
+
+        if str(candidate["verified_by_paul"] or "").lower() == "yes":
+            score += 10
+        if re.search(
+            r"strong|high",
+            str(candidate["reference_quality"] or "").lower()
+        ):
+            score += 4
+
+        scored.append((score, candidate))
+
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    selected = scored[:top_n]
+
+    chunks_needed = {}
+    for _, candidate in selected:
+        chunks_needed.setdefault(int(candidate["chunk_id"]), set()).add(
+            int(candidate["record_id"])
+        )
+
+    full_records = {}
+    for chunk_id, wanted_ids in chunks_needed.items():
+        for record in load_record_chunk(chunk_id):
+            record_id = int(record.get("record_id", 0))
+            if record_id in wanted_ids:
+                full_records[record_id] = record
 
     matches = []
-    for index in top_indexes:
-        row = df.loc[index]
-        clean_title = (
-            clean_cell(row.get("AI_Clean_Title", ""))
-            or clean_cell(row.get("Item_Title", ""))
-        )
-        clean_description = (
-            clean_cell(row.get("AI_Clean_Description", ""))
-            or clean_cell(row.get("Item_Description", ""))
-        )
-
+    for score, candidate in selected:
+        record_id = int(candidate["record_id"])
+        record = full_records.get(record_id, {})
         matches.append({
-            "match_score": int(scores.loc[index]),
-            "title": clean_title[:250],
-            "description": clean_description[:1200],
-            "category": clean_cell(row.get("Category", "")),
-            "subcategory": clean_cell(row.get("Subcategory", "")),
-            "item_type": (
-                clean_cell(row.get("AI_Item_Type", ""))
-                or clean_cell(row.get("Inferred_Item_Type", ""))
+            "match_score": int(score),
+            "title": str(record.get("title") or candidate["title"] or "")[:250],
+            "description": str(record.get("description") or "")[:1200],
+            "category": str(record.get("category") or candidate["category"] or ""),
+            "subcategory": str(record.get("subcategory") or candidate["subcategory"] or ""),
+            "item_type": str(record.get("item_type") or candidate["item_type"] or ""),
+            "style": str(record.get("style") or candidate["style"] or ""),
+            "materials": str(record.get("materials") or candidate["materials"] or ""),
+            "maker": str(record.get("maker") or candidate["maker"] or ""),
+            "list_price": str(record.get("list_price") or candidate["list_price"] or ""),
+            "net_price": str(record.get("net_price") or candidate["net_price"] or ""),
+            "verified_by_paul": str(
+                record.get("verified_by_paul")
+                or candidate["verified_by_paul"]
+                or ""
             ),
-            "style": (
-                clean_cell(row.get("AI_Period_Opening", ""))
-                or clean_cell(row.get("Style", ""))
-            ),
-            "materials": (
-                clean_cell(row.get("AI_Materials_Clean", ""))
-                or clean_cell(row.get("Materials_Normalized", ""))
-                or clean_cell(row.get("Materials_Raw", ""))
-            ),
-            "maker": clean_cell(row.get("Designer_or_Maker", "")),
-            "list_price": clean_cell(row.get("Original_List_Price_USD", "")),
-            "net_price": clean_cell(row.get("Actual_Net_Sale_Price_USD", "")),
-            "verified_by_paul": clean_cell(row.get("Verified_By_Paul", "")),
         })
 
     return matches
@@ -1126,7 +1070,7 @@ def display_draft_card(draft, allow_load=False, allow_delete=False, key_prefix="
             st.image(
                 photo_urls[0],
                 caption=f"{len(photo_urls)} photo{'s' if len(photo_urls) != 1 else ''}",
-                use_container_width=True
+                width="stretch"
             )
         else:
             st.info("No photo available.")
@@ -1176,7 +1120,7 @@ def display_draft_card(draft, allow_load=False, allow_delete=False, key_prefix="
                 if st.button(
                     "Continue Editing",
                     type="primary",
-                    use_container_width=True,
+                    width="stretch",
                     key=f"{key_prefix}_load_{draft_id}"
                 ):
                     with st.spinner("Connecting saved Cloudinary photos to this draft..."):
@@ -1195,7 +1139,7 @@ def display_draft_card(draft, allow_load=False, allow_delete=False, key_prefix="
                 if not st.session_state.get(confirm_key):
                     if st.button(
                         "Delete Draft",
-                        use_container_width=True,
+                        width="stretch",
                         key=f"{key_prefix}_delete_{draft_id}"
                     ):
                         st.session_state[confirm_key] = True
@@ -1207,7 +1151,7 @@ def display_draft_card(draft, allow_load=False, allow_delete=False, key_prefix="
                         if st.button(
                             "Yes, delete",
                             type="primary",
-                            use_container_width=True,
+                            width="stretch",
                             key=f"{key_prefix}_yes_delete_{draft_id}"
                         ):
                             ok, message = delete_draft_in_google_sheet(
@@ -1228,7 +1172,7 @@ def display_draft_card(draft, allow_load=False, allow_delete=False, key_prefix="
                     with confirm_cols[1]:
                         if st.button(
                             "Cancel",
-                            use_container_width=True,
+                            width="stretch",
                             key=f"{key_prefix}_cancel_delete_{draft_id}"
                         ):
                             st.session_state.pop(confirm_key, None)
@@ -1245,7 +1189,7 @@ if not st.session_state.get("authenticated"):
     login_gate()
 
 st.title(APP_TITLE)
-st.caption("Employee Access + High Style Brain + audit trail and learning metrics.")
+st.caption("Smart Brain Index + Advanced Draft Manager + learning metrics.")
 
 current_user = st.session_state.get("current_user", "Unknown")
 current_role = st.session_state.get("current_role", "Employee")
@@ -1275,11 +1219,11 @@ with st.sidebar:
         st.warning(c_msg)
 
     st.header("High Style Brain")
-    brain_df, brain_source = load_high_style_brain()
-    if brain_source:
-        st.success(f"Brain loaded: {brain_source} ({len(brain_df):,} rows)")
+    brain_ok, brain_message = brain_status()
+    if brain_ok:
+        st.success(brain_message)
     else:
-        st.warning("High Style Brain V5 dataset not found.")
+        st.warning(brain_message)
 
     if st.button("Start New Entry / Clear Current Form"):
         clear_entry_state()
@@ -1453,7 +1397,7 @@ if restored_draft_photos:
     for i, photo in enumerate(restored_draft_photos[:8]):
         with restored_cols[i % len(restored_cols)]:
             try:
-                st.image(photo.source_url, caption=f"Saved photo {i+1}", use_container_width=True)
+                st.image(photo.source_url, caption=f"Saved photo {i+1}", width="stretch")
             except Exception:
                 st.caption(f"Saved photo {i+1}: {photo.name}")
 
@@ -1465,7 +1409,7 @@ if restored_draft_photos:
 
 new_uploaded_photos = st.file_uploader(
     "Upload main photo plus detail photos",
-    type=["jpg", "jpeg", "png", "webp", "heic", "heif"],
+    type=["jpg", "jpeg", "png", "webp"],
     accept_multiple_files=True,
     key=f"photo_uploader_{st.session_state['uploader_version']}"
 )
@@ -1479,7 +1423,7 @@ if new_uploaded_photos:
     for i, photo in enumerate(new_uploaded_photos[:8]):
         with cols[i % len(cols)]:
             try:
-                st.image(photo, caption=f"New photo {i+1}", use_container_width=True)
+                st.image(photo, caption=f"New photo {i+1}", width="stretch")
             except Exception:
                 st.caption(f"New photo {i+1}: {photo.name}")
 
@@ -1566,17 +1510,36 @@ if st.button("Generate Draft Item Record", type="primary"):
         st.warning("Upload a photo or load a saved draft containing photos.")
         st.stop()
 
-    with st.spinner("Reading photos and building High Style Brain search profile..."):
-        brain_profile = quick_image_profile(photos, dims, known_info, notes)
+    generation_status = st.status("Generating item record...", expanded=True)
 
-    with st.spinner("Searching High Style Brain V5 for similar historical records..."):
-        brain_matches = find_brain_matches(brain_df, brain_profile, dims, known_info, notes, top_n=6)
+    generation_status.write("1 of 4 — Analyzing photos")
+    brain_profile = quick_image_profile(photos, dims, known_info, notes)
+
+    generation_status.write("2 of 4 — Searching the Smart Brain Index")
+    brain_matches = find_brain_matches(
+        brain_profile, dims, known_info, notes, top_n=6
+    )
 
     st.session_state["brain_profile"] = brain_profile
     st.session_state["brain_matches"] = brain_matches
 
-    with st.spinner("Generating draft using High Style Brain examples..."):
-        result = generate_draft(photos, dims, notes, known_info, target_price, brain_matches=brain_matches, brain_profile=brain_profile)
+    generation_status.write("3 of 4 — Writing title, description, and pricing")
+    result = generate_draft(
+        photos,
+        dims,
+        notes,
+        known_info,
+        target_price,
+        brain_matches=brain_matches,
+        brain_profile=brain_profile
+    )
+
+    generation_status.write("4 of 4 — Finalizing draft")
+    generation_status.update(
+        label="Generation complete",
+        state="complete",
+        expanded=False
+    )
 
     if result["error"]:
         st.error(result["error"])
@@ -1759,7 +1722,7 @@ if "draft" in st.session_state:
         "Description": description,
         "Status": "Approved"
     }])
-    st.dataframe(preview, use_container_width=True, hide_index=True)
+    st.dataframe(preview, width="stretch", hide_index=True)
 
     st.header("6. Approve & Save Final Version to Google Sheet")
     st.caption(f"Approver: {current_user}")
