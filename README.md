@@ -1,24 +1,21 @@
-# High Style AI – Task 3.3.2: Friendly Draft Cards
+# High Style AI – Task 3.3.3: Restore Draft Photos
 
-This version keeps all Task 3.3.1 features and replaces the raw draft JSON display with a clean, employee-friendly draft view.
+This version keeps all Task 3.3.2 features and restores saved Cloudinary images when a user loads a draft.
 
 ## What changed
 
-Each selected draft now shows:
+When the user clicks `Load This Draft`:
 
-- One uploaded photo
-- Number of photos saved
-- Draft ID
-- Status
-- Saved by
-- Date saved
-- Dimensions, when entered
-- Known information, when entered
-- Internal notes, when entered
-- Target price, when entered
-- A clear `Load This Draft` button
+- All saved Cloudinary photo URLs are downloaded into the active Streamlit session.
+- The photos appear in the main photo section.
+- The restored photos are automatically passed into High Style Brain analysis and AI generation.
+- The user does not need to re-upload the photos.
+- New photos may still be added alongside the restored photos.
+- Re-saving the draft preserves the existing Cloudinary URLs and uploads only newly added files.
 
-Raw JSON/code is no longer shown.
+## Streamlit limitation
+
+The browser-native file uploader cannot be programmatically populated. Instead, restored photos are displayed immediately above the upload control and are treated internally exactly like uploaded files.
 
 ## Upload to GitHub
 

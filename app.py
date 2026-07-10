@@ -33,7 +33,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Inventory Intake Task 3.3.2"
+APP_TITLE = "High Style AI – Inventory Intake Task 3.3.3"
 
 # -----------------------------
 # State / Reset
@@ -51,7 +51,7 @@ def clear_entry_state():
     exact_keys = [
         "draft", "item_id", "photo_names", "dims_inputs", "dims_formatted",
         "input_notes", "photos_for_save", "last_saved", "original_ai_draft",
-        "retry_history", "brain_profile", "brain_matches", "submitted_by", "submitted_date", "loaded_draft", "draft_list"
+        "retry_history", "brain_profile", "brain_matches", "submitted_by", "submitted_date", "loaded_draft", "draft_list", "restored_draft_photos", "restored_photo_errors"
     ]
     prefixes = [
         "height_input_", "width_input_", "depth_input_", "diameter_input_",
@@ -264,6 +264,42 @@ def parse_draft_photo_urls(draft):
         pass
     primary = draft.get("Primary_Image_URL", "")
     return [primary] if primary else []
+
+class RestoredDraftPhoto(BytesIO):
+    """In-memory image that behaves like a Streamlit UploadedFile for this app."""
+    def __init__(self, content, name, source_url):
+        super().__init__(content)
+        self.name = name
+        self.type = "image/jpeg"
+        self.size = len(content)
+        self.source_url = source_url
+
+    def getvalue(self):
+        return super().getvalue()
+
+def restore_draft_photos(draft):
+    photo_urls = parse_draft_photo_urls(draft)
+    restored = []
+    errors = []
+
+    for index, url in enumerate(photo_urls, 1):
+        try:
+            response = requests.get(str(url), timeout=30)
+            response.raise_for_status()
+            filename = str(url).split("/")[-1].split("?")[0] or f"draft-photo-{index}.jpg"
+            if "." not in filename:
+                filename += ".jpg"
+            restored.append(
+                RestoredDraftPhoto(
+                    response.content,
+                    filename,
+                    str(url)
+                )
+            )
+        except Exception as exc:
+            errors.append(f"Photo {index}: {exc}")
+
+    return restored, errors
 
 def friendly_date(value):
     text = str(value or "").strip()
@@ -908,8 +944,14 @@ with st.expander("Saved Drafts", expanded=False):
                     st.caption("No dimensions or notes were entered when this draft was saved.")
 
                 if st.button("Load This Draft", type="primary", use_container_width=True):
+                    with st.spinner("Restoring saved photos from Cloudinary..."):
+                        restored_photos, restore_errors = restore_draft_photos(selected_draft)
+
                     st.session_state["loaded_draft"] = selected_draft
+                    st.session_state["restored_draft_photos"] = restored_photos
+                    st.session_state["restored_photo_errors"] = restore_errors
                     st.session_state["form_version"] = st.session_state.get("form_version", 0) + 1
+                    st.session_state["uploader_version"] = st.session_state.get("uploader_version", 0) + 1
                     st.rerun()
     else:
         st.caption("No drafts loaded yet.")
@@ -917,21 +959,46 @@ with st.expander("Saved Drafts", expanded=False):
 loaded_draft = st.session_state.get("loaded_draft", {})
 
 st.header("1. Upload item photos")
-photos = st.file_uploader(
+
+restored_draft_photos = st.session_state.get("restored_draft_photos", [])
+if restored_draft_photos:
+    st.success(
+        f"{len(restored_draft_photos)} saved draft photo"
+        f"{'s' if len(restored_draft_photos) != 1 else ''} restored and ready to use."
+    )
+    restored_cols = st.columns(min(len(restored_draft_photos), 4))
+    for i, photo in enumerate(restored_draft_photos[:8]):
+        with restored_cols[i % len(restored_cols)]:
+            try:
+                st.image(photo.getvalue(), caption=f"Saved photo {i+1}", use_container_width=True)
+            except Exception:
+                st.caption(f"Saved photo {i+1}: {photo.name}")
+
+    restore_errors = st.session_state.get("restored_photo_errors", [])
+    if restore_errors:
+        st.warning("Some saved photos could not be restored: " + "; ".join(restore_errors))
+
+    st.caption("These saved photos will be used automatically. Upload below only to replace or add new photos.")
+
+new_uploaded_photos = st.file_uploader(
     "Upload main photo plus detail photos",
     type=["jpg", "jpeg", "png", "webp", "heic", "heif"],
     accept_multiple_files=True,
     key=f"photo_uploader_{st.session_state['uploader_version']}"
 )
 
-if photos:
-    cols = st.columns(min(len(photos), 4))
-    for i, photo in enumerate(photos[:4]):
+# Newly uploaded photos are added after restored draft photos.
+photos = list(restored_draft_photos) + list(new_uploaded_photos or [])
+
+if new_uploaded_photos:
+    st.caption(f"{len(new_uploaded_photos)} new photo{'s' if len(new_uploaded_photos) != 1 else ''} added.")
+    cols = st.columns(min(len(new_uploaded_photos), 4))
+    for i, photo in enumerate(new_uploaded_photos[:8]):
         with cols[i % len(cols)]:
             try:
-                st.image(photo, caption=f"Photo {i+1}", use_container_width=True)
+                st.image(photo, caption=f"New photo {i+1}", use_container_width=True)
             except Exception:
-                st.caption(f"Photo {i+1}: {photo.name}")
+                st.caption(f"New photo {i+1}: {photo.name}")
 
 st.header("2. Enter dimensions")
 c1, c2, c3 = st.columns(3)
@@ -965,10 +1032,22 @@ with draft_col1:
             st.warning("Cloudinary is not configured.")
         else:
             draft_id = loaded_draft.get("Draft_ID") or generate_draft_id()
-            with st.spinner("Uploading draft photos to Cloudinary..."):
-                draft_photo_urls, draft_errors = upload_draft_photos_to_cloudinary(photos, draft_id)
+            existing_draft_urls = parse_draft_photo_urls(loaded_draft) if loaded_draft else []
+            photos_to_upload = list(new_uploaded_photos or [])
+
+            if photos_to_upload:
+                with st.spinner("Uploading new draft photos to Cloudinary..."):
+                    new_draft_urls, draft_errors = upload_draft_photos_to_cloudinary(
+                        photos_to_upload,
+                        draft_id + "-new"
+                    )
+            else:
+                new_draft_urls, draft_errors = [], []
+
+            draft_photo_urls = existing_draft_urls + new_draft_urls
+
             if draft_errors:
-                st.warning("Some draft photos did not upload: " + "; ".join(draft_errors))
+                st.warning("Some new draft photos did not upload: " + "; ".join(draft_errors))
             draft_payload = {
                 "Draft_ID": draft_id,
                 "Status": "Draft",
@@ -1001,7 +1080,7 @@ with draft_col2:
 
 if st.button("Generate Draft Item Record", type="primary"):
     if not photos:
-        st.warning("Upload at least one item photo.")
+        st.warning("Upload a photo or load a saved draft containing photos.")
         st.stop()
 
     with st.spinner("Reading photos and building High Style Brain search profile..."):
