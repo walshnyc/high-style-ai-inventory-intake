@@ -17,7 +17,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Inventory Intake Task 3.4.1"
+APP_TITLE = "High Style AI – Inventory Intake Task 3.4.2"
 
 # -----------------------------
 # State / Reset
@@ -709,6 +709,13 @@ def parse_json(text):
 def generate_item_id():
     return "HSAI-" + datetime.now().strftime("%Y%m%d") + "-" + str(uuid.uuid4())[:6].upper()
 
+def is_blank_value(value):
+    if value is None:
+        return True
+    if isinstance(value, float):
+        return value != value
+    return str(value).strip().lower() in {"", "nan", "none", "null"}
+
 def normalize_price(value):
     s = "" if value is None else str(value).strip()
     if not s:
@@ -1189,7 +1196,7 @@ if not st.session_state.get("authenticated"):
     login_gate()
 
 st.title(APP_TITLE)
-st.caption("Smart Brain Index + Advanced Draft Manager + learning metrics.")
+st.caption("Zero-Pandas Runtime + Smart Brain Index + Advanced Draft Manager.")
 
 current_user = st.session_state.get("current_user", "Unknown")
 current_role = st.session_state.get("current_role", "Employee")
@@ -1714,14 +1721,14 @@ if "draft" in st.session_state:
     st.caption("These metrics are saved to the Learning Log to show how much the AI output changed before approval.")
 
     st.subheader("Shoot List Row Preview")
-    preview = pd.DataFrame([{
+    preview = [{
         "Image": "Cloudinary thumbnail will appear in Google Sheet",
         "Title": title,
         "Dimensions": dims_final,
         "Price": normalize_price(approved_price),
         "Description": description,
         "Status": "Approved"
-    }])
+    }]
     st.dataframe(preview, width="stretch", hide_index=True)
 
     st.header("6. Approve & Save Final Version to Google Sheet")

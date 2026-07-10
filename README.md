@@ -1,13 +1,27 @@
-# High Style AI – Task 3.4.1: Smart Brain Index
+# High Style AI – Task 3.4.2: Zero-Pandas Runtime
 
-The live app now uses a compact metadata database, compressed token shards,
-and compressed full-record chunks.
+This version fixes the Shoot List preview error and removes the last pandas runtime dependency.
 
-- Historical records: 12,880
-- Record chunks: 18
-- Token shards: 36
-- No Excel, pandas, openpyxl, or pillow-heif at runtime
-- Only selected historical descriptions are decompressed
+## Fixes
 
-Upload `app.py`, `requirements.txt`, `README.md`, and the complete `data` folder.
-Every individual file is below GitHub's 25 MB browser-upload limit.
+- Replaces `pd.DataFrame(...)` in the Shoot List preview with a native list of records
+- Removes every remaining pandas import and `pd.*` reference
+- Keeps the Smart Brain Index and compressed historical record architecture
+- Keeps the Draft Manager, audit trail, learning metrics, employee login, Cloudinary, and Google Sheet workflows
+
+## Runtime
+
+No pandas.
+No openpyxl.
+No Excel loading.
+
+## GitHub upload
+
+Upload:
+
+- app.py
+- requirements.txt
+- README.md
+- the complete data folder
+
+Then reboot Streamlit.
