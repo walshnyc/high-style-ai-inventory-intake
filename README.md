@@ -1,58 +1,38 @@
-# High Style AI – Inventory Intake Task 3.3: Draft Inventory Queue
+# High Style AI – Task 3.3.1: Streamlit Startup Stability Fix
 
-This version keeps everything from Task 3.2 and adds draft inventory support.
+This hotfix keeps all Task 3.3 features and addresses the Streamlit Community Cloud startup segmentation fault.
 
-## Kept from Task 3.2
+## What changed
 
-- Employee login
-- Hidden Google Apps Script URL from Streamlit secrets
-- High Style Brain V5 historical matching
-- Feedback retry loop
-- Audit Trail Preview
-- Learning metrics
-- Cloudinary image upload
-- Google Sheet save
-- Submit Another Entry reset
+- Pins Python package versions instead of installing unpredictable latest releases
+- Pins `pillow-heif==0.13.0`
+- Pins `pillow==10.4.0`
+- Loads the native HEIC plugin only when an image needs it
+- Keeps:
+  - Draft Inventory Queue
+  - Audit trail and learning metrics
+  - Employee login
+  - Hidden Google Sheet connection
+  - High Style Brain
+  - Cloudinary
+  - Feedback retry loop
 
-## New in Task 3.3
+## Upload to GitHub
 
-- Save Draft button
-- Draft photos upload to Cloudinary
-- Draft metadata saved to Google Sheets with `Action = Draft_Save`
-- Saved Drafts area
-- Optional draft loading with `Action = Draft_List`
-- Final approved inventory can carry `Source_Draft_ID`
-
-## Required GitHub upload
-
-Upload all of these:
+Upload:
 
 - app.py
 - requirements.txt
 - README.md
-- data/High_Style_Deco_Master_Dataset_V5_AI_Ready_Verification.xlsx
+- data folder
 
 Do not upload `__pycache__`.
 
-## Streamlit secrets
+## Streamlit
 
-Keep your existing secrets:
+After committing the files:
 
-```toml
-OPENAI_API_KEY = "your_openai_key"
-CLOUDINARY_CLOUD_NAME = "your_cloud_name"
-CLOUDINARY_API_KEY = "your_cloudinary_api_key"
-CLOUDINARY_API_SECRET = "your_cloudinary_api_secret"
-EMPLOYEE_PASSWORD = "choose_employee_password"
-ADMIN_PASSWORD = "choose_admin_password"
-GOOGLE_APPS_SCRIPT_URL = "https://script.google.com/macros/s/xxxxx/exec"
-```
-
-## Apps Script update needed
-
-To fully use drafts, the Google Apps Script needs to support:
-
-- `Action = Draft_Save`
-- `Action = Draft_List`
-
-If the script is not updated, the rest of the app still works, but draft saving/loading will not work correctly.
+1. Open the app in Streamlit Community Cloud.
+2. Open Manage app.
+3. Reboot the app.
+4. Watch the logs until the app reaches Running.

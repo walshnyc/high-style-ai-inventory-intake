@@ -7,11 +7,20 @@ import streamlit as st
 from PIL import Image
 import requests
 
-try:
-    from pillow_heif import register_heif_opener
-    register_heif_opener()
-except Exception:
-    pass
+HEIF_INITIALIZED = False
+
+def ensure_heif_support():
+    """Load the native HEIC plugin only when an image actually needs it."""
+    global HEIF_INITIALIZED
+    if HEIF_INITIALIZED:
+        return True
+    try:
+        from pillow_heif import register_heif_opener
+        register_heif_opener()
+        HEIF_INITIALIZED = True
+        return True
+    except Exception:
+        return False
 
 try:
     from openai import OpenAI
@@ -24,7 +33,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Inventory Intake Task 3.3"
+APP_TITLE = "High Style AI – Inventory Intake Task 3.3.1"
 
 # -----------------------------
 # State / Reset
@@ -155,7 +164,12 @@ def configure_cloudinary():
     return True, ""
 
 def safe_open_image(raw):
-    return Image.open(BytesIO(raw)).convert("RGB")
+    # JPEG/PNG/WebP open normally. HEIC/HEIF support is initialized lazily.
+    try:
+        return Image.open(BytesIO(raw)).convert("RGB")
+    except Exception:
+        ensure_heif_support()
+        return Image.open(BytesIO(raw)).convert("RGB")
 
 def image_to_data_url(uploaded_file):
     raw = uploaded_file.getvalue()
