@@ -17,7 +17,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Inventory Intake Task 3.4.3"
+APP_TITLE = "High Style AI – Inventory Intake Task 3.4.4"
 
 # -----------------------------
 # State / Reset
@@ -47,7 +47,7 @@ def clear_entry_state():
         "maker_review_", "materials_review_", "dims_final_review_",
         "condition_notes_review_", "price_tag_review_", "seo_review_",
         "internal_review_notes_", "title_feedback_", "description_feedback_",
-        "price_feedback_", "reference_feedback_", "changed_notes_"
+        "price_feedback_", "reference_feedback_", "changed_notes_", "shoot_month_select_"
     ]
     for k in list(st.session_state.keys()):
         if k in exact_keys or any(k.startswith(p) for p in prefixes):
@@ -1691,6 +1691,40 @@ Return ONLY valid JSON:
             "repair_history": [],
         }
 
+
+# -----------------------------
+# Monthly Shoot List helpers
+# -----------------------------
+
+def add_months(year, month, offset):
+    absolute_month = (year * 12 + (month - 1)) + offset
+    return absolute_month // 12, absolute_month % 12 + 1
+
+
+def shoot_month_label(year, month):
+    return datetime(year, month, 1).strftime("%B %Y")
+
+
+def shoot_list_tab_name(month_label):
+    return f"Shoot List - {month_label}"
+
+
+def shoot_month_choices():
+    """
+    The next month is the default because High Style generally prepares the
+    upcoming shoot list. Current month and the following six months remain
+    available for overrides.
+    """
+    today = datetime.now()
+    choices = []
+
+    for offset in range(0, 7):
+        year, month = add_months(today.year, today.month, offset)
+        choices.append(shoot_month_label(year, month))
+
+    default_index = 1 if len(choices) > 1 else 0
+    return choices, default_index
+
 # -----------------------------
 # Google Sheet
 # -----------------------------
@@ -1920,7 +1954,7 @@ if not st.session_state.get("authenticated"):
     login_gate()
 
 st.title(APP_TITLE)
-st.caption("Enforced House Rules + Feedback Learning + Smart Brain Index.")
+st.caption("Permanent Master Inventory + Automatic Monthly Shoot Lists + Enforced House Rules.")
 
 current_user = st.session_state.get("current_user", "Unknown")
 current_role = st.session_state.get("current_role", "Employee")
@@ -2178,6 +2212,30 @@ known_info = st.text_area("Known maker/style/materials/period", value=str(loaded
 notes = st.text_area("Internal notes", value=str(loaded_draft.get("Internal_Notes", "")), height=90, key=f"notes_input_{form_key}")
 target_price = st.text_input("Optional target/list price", value=str(loaded_draft.get("Target_Price", "")), key=f"target_price_input_{form_key}")
 
+shoot_choices, shoot_default_index = shoot_month_choices()
+loaded_shoot_month = str(loaded_draft.get("Shoot_List_Month", "") or "").strip()
+
+if loaded_shoot_month and loaded_shoot_month not in shoot_choices:
+    shoot_choices = [loaded_shoot_month] + shoot_choices
+    shoot_default_index = 0
+elif loaded_shoot_month in shoot_choices:
+    shoot_default_index = shoot_choices.index(loaded_shoot_month)
+
+shoot_month = st.selectbox(
+    "Target monthly shoot list",
+    shoot_choices,
+    index=shoot_default_index,
+    key=f"shoot_month_select_{form_key}",
+    help=(
+        "The app defaults to next month. On approval, the item is saved to "
+        "Master_Inventory and also added to this monthly shoot-list tab."
+    ),
+)
+st.caption(
+    f"Approval destination: Master_Inventory + "
+    f"{shoot_list_tab_name(shoot_month)}"
+)
+
 
 draft_col1, draft_col2 = st.columns([1, 2])
 with draft_col1:
@@ -2223,6 +2281,7 @@ with draft_col1:
                 "Known_Info": known_info,
                 "Internal_Notes": notes,
                 "Target_Price": target_price,
+                "Shoot_List_Month": shoot_month,
                 "Last_Updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
                 "User_Role": current_role
             }
@@ -2576,18 +2635,24 @@ if "draft" in st.session_state:
         st.metric("Overall edit score", f'{audit_preview_metrics["Overall_Edit_Score"]}%')
     st.caption("These metrics are saved to the Learning Log to show how much the AI output changed before approval.")
 
-    st.subheader("Shoot List Row Preview")
+    st.subheader(f"{shoot_list_tab_name(shoot_month)} Row Preview")
+    st.caption(
+        "The full approved record will be saved permanently to Master_Inventory. "
+        "This monthly tab is the current production queue."
+    )
     preview = [{
+        "Item ID": item_id,
         "Image": "Cloudinary thumbnail will appear in Google Sheet",
         "Title": title,
         "Dimensions": dims_final,
         "Price": normalize_price(approved_price),
         "Description": description,
-        "Status": "Approved"
+        "Status": "Awaiting Photography",
+        "Shoot List": shoot_month,
     }]
     st.dataframe(preview, width="stretch", hide_index=True)
 
-    st.header("6. Approve & Save Final Version to Google Sheet")
+    st.header("6. Approve to Master Inventory and Monthly Shoot List")
     st.caption(f"Approver: {current_user}")
 
     if st.session_state.get("last_saved"):
@@ -2628,7 +2693,12 @@ if "draft" in st.session_state:
         )
 
         payload = {
-            "Item_ID": item_id, "Status": "Approved", "Primary_Image": image_formula,
+            "Action": "Inventory_Save",
+            "Item_ID": item_id,
+            "Status": "Awaiting Photography",
+            "Shoot_List_Month": shoot_month,
+            "Shoot_List_Tab": shoot_list_tab_name(shoot_month),
+            "Primary_Image": image_formula,
             "Primary_Image_URL": primary_url, "Additional_Images": ", ".join(st.session_state.get("photo_names", [])[1:]),
             "AI_Confidence": confidence, "Title": title, "Description": description, "Dimensions": dims_final,
             "Height_in": inputs.get("height", ""), "Width_in": inputs.get("width", ""), "Depth_in": inputs.get("depth", ""),
@@ -2656,7 +2726,10 @@ if "draft" in st.session_state:
         }
 
         learning_payload = {
-            "Timestamp": now, "Item_ID": item_id,
+            "Timestamp": now,
+            "Item_ID": item_id,
+            "Shoot_List_Month": shoot_month,
+            "Shoot_List_Tab": shoot_list_tab_name(shoot_month),
             "Original_AI_Title": original.get("title", ""), "Final_Approved_Title": title,
             "Original_AI_Description": original.get("description", ""), "Final_Approved_Description": description,
             "Original_AI_Price": original.get("suggested_price_usd", ""), "Final_Approved_Price": price,
@@ -2698,7 +2771,7 @@ if "draft" in st.session_state:
             "Overall_Edit_Score": audit_metrics["Overall_Edit_Score"]
         }
 
-        with st.spinner("Sending final approved item to Google Sheet..."):
+        with st.spinner("Saving to Master Inventory and monthly shoot list..."):
             ok, msg = send_to_google_sheet(web_app_url, payload)
         if not ok:
             st.error(msg)
@@ -2707,7 +2780,10 @@ if "draft" in st.session_state:
         with st.spinner("Sending learning log..."):
             log_ok, log_msg = send_learning_log(web_app_url, learning_payload)
 
-        st.success("Final approved item saved to Google Sheet.")
+        st.success(
+            f"Approved item saved to Master_Inventory and "
+            f"{shoot_list_tab_name(shoot_month)}."
+        )
         if log_ok:
             st.success("Feedback, retry history, and Brain matches saved to Learning_Log.")
         else:

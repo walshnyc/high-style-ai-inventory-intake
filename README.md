@@ -1,50 +1,64 @@
-# High Style AI – Task 3.4.3
+# High Style AI — Task 3.4.4
 
-## Enforced House Rules + Feedback Learning
+## Permanent Master Inventory + Automatic Monthly Shoot Lists
 
-This version adds a validation and learning layer on top of the Smart Brain.
+### New approval workflow
 
-### Enforced title rules
+Every approved item is:
 
-- Maximum 80 characters
-- Must include the item type
-- No place of origin
-- No year, date, decade, circa, c., or ca.
+1. inserted or updated in `Master_Inventory`;
+2. inserted or updated in the selected monthly tab, such as
+   `Shoot List - August 2026`;
+3. updated in `Price_Tags`;
+4. updated in `Listing_Copy`;
+5. recorded in `Learning_Log`.
 
-### Enforced description rules
+The `Item_ID` is the permanent key. Re-saving the same item updates its existing
+row instead of creating a duplicate.
 
-- Mandatory 190–220 words
-- Begins with the period or style
-- Prohibited condition phrases rejected
-- Exact furniture condition sentence required
-- Exact lighting rewiring sentence required
+### Monthly selection
 
-### Automatic repair
+The app defaults to the next calendar month and allows the current month plus
+the following six months. A saved draft remembers its selected shoot month.
 
-After generation, the app checks every mandatory rule. Failed drafts are
-automatically rewritten and checked again up to two times before being shown.
+### Existing inventory
 
-### Persistent feedback learning
+On the first approved save, the Apps Script safely creates `Master_Inventory`.
+When the old `Intake_Master` exists and the new master is empty, its existing
+rows are copied into the new master one time. The old tab is not deleted.
 
-The app requests:
+### Apps Script deployment
 
-- active structured rules from the `Learned_Rules` tab
-- recent useful feedback from `Learning_Log`
+Use the included file:
 
-Those rules are inserted into both initial generation and feedback retry prompts.
+`Code.gs_FULL_REPLACEMENT_Task3_4_4.gs`
 
-### Approval protection
+This is a complete replacement for your current `Code.gs`. It already contains:
 
-The Approve & Save button is disabled until every mandatory house rule passes.
+- draft actions;
+- Learning_Log;
+- Learning_Rules from Task 3.4.3;
+- Master_Inventory;
+- monthly shoot-list creation;
+- Price_Tags and Listing_Copy updates.
 
-## Upload to GitHub
+After replacing Code.gs:
+
+1. Save.
+2. Deploy → Manage deployments.
+3. Edit the web app.
+4. Choose New version.
+5. Deploy.
+
+Your Streamlit secret URL does not need to change.
+
+### GitHub deployment
 
 Upload:
 
-- app.py
-- requirements.txt
-- README.md
-- the complete data folder
+- `app.py`
+- `requirements.txt`
+- `README.md`
+- the complete `data` folder
 
-The included Apps Script additions must also be added to Code.gs and deployed
-as a new web-app version.
+Then reboot the Streamlit application.
