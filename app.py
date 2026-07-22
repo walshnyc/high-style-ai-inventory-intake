@@ -17,7 +17,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Inventory Intake Task 3.4.2"
+APP_TITLE = "High Style AI – Inventory Intake Task 3.4.3"
 
 # -----------------------------
 # State / Reset
@@ -35,7 +35,7 @@ def clear_entry_state():
     exact_keys = [
         "draft", "item_id", "photo_names", "dims_inputs", "dims_formatted",
         "input_notes", "photos_for_save", "last_saved", "original_ai_draft",
-        "retry_history", "brain_profile", "brain_matches", "submitted_by", "submitted_date", "loaded_draft", "draft_list", "restored_draft_photos", "restored_photo_errors"
+        "retry_history", "brain_profile", "brain_matches", "learned_rules", "rule_repair_history", "submitted_by", "submitted_date", "loaded_draft", "draft_list", "restored_draft_photos", "restored_photo_errors"
     ]
     prefixes = [
         "height_input_", "width_input_", "depth_input_", "diameter_input_",
@@ -690,6 +690,608 @@ def find_brain_matches(profile, dims, known_info, notes, top_n=6):
 
     return matches
 
+
+# -----------------------------
+# House Rules + Feedback Learning
+# -----------------------------
+
+DESCRIPTION_MIN_WORDS = 190
+DESCRIPTION_MAX_WORDS = 220
+TITLE_MAX_CHARACTERS = 80
+
+FORBIDDEN_DESCRIPTION_PHRASES = [
+    "wear consistent with age and use",
+    "aged",
+    "age-related wear",
+    "minor imperfections",
+    "surface scratches",
+]
+
+FORBIDDEN_TITLE_ORIGIN_TERMS = [
+    "american", "austrian", "belgian", "brazilian", "british", "chinese",
+    "danish", "dutch", "english", "french", "german", "italian", "japanese",
+    "mexican", "norwegian", "portuguese", "scandinavian", "spanish",
+    "swedish", "swiss", "united states", "usa",
+]
+
+STYLE_OPENERS = [
+    "art deco",
+    "mid-century modern",
+    "midcentury modern",
+    "modernist",
+    "postmodern",
+    "hollywood regency",
+    "bauhaus",
+    "neoclassical",
+    "brutalist",
+    "italian modern",
+    "french modern",
+    "vienna secession",
+    "memphis",
+]
+
+FURNITURE_CATEGORIES = {
+    "tables",
+    "seating",
+    "case pieces",
+    "mirrors",
+}
+
+FURNITURE_CONDITION_SENTENCE = (
+    "Presented in excellent mint restored condition."
+)
+
+LIGHTING_CONDITION_SENTENCE = (
+    "Excellent condition. This piece has been professionally rewired "
+    "to US standards and is ready for installation."
+)
+
+
+def fetch_learned_rules(url, category="", limit=40):
+    """
+    Reads persistent house preferences and recent reinforced feedback.
+
+    Expected Apps Script response:
+    {
+      "result": "success",
+      "rules": [
+        {
+          "Rule_ID": "...",
+          "Area": "Description",
+          "Rule": "...",
+          "Category": "All",
+          "Priority": "High",
+          "Times_Reinforced": 3,
+          "Active": "Yes"
+        }
+      ]
+    }
+
+    The app safely continues with built-in rules when the Apps Script action
+    has not been added yet.
+    """
+    url = normalize_google_script_url(url)
+
+    if not url:
+        return []
+
+    payload = {
+        "Action": "Learning_Rules",
+        "Category": category or "",
+        "Limit": int(limit),
+    }
+
+    try:
+        response = requests.post(
+            url,
+            data=json.dumps(payload),
+            headers={"Content-Type": "application/json"},
+            timeout=30,
+            allow_redirects=True,
+        )
+
+        if response.status_code >= 400:
+            return []
+
+        data = response.json()
+        rules = data.get("rules", [])
+
+        if not isinstance(rules, list):
+            return []
+
+        cleaned = []
+
+        for rule in rules:
+            if isinstance(rule, str):
+                text = rule.strip()
+                if text:
+                    cleaned.append({
+                        "Rule": text,
+                        "Area": "General",
+                        "Category": "All",
+                        "Priority": "Medium",
+                    })
+                continue
+
+            if not isinstance(rule, dict):
+                continue
+
+            active = str(rule.get("Active", "Yes") or "Yes").strip().lower()
+            if active not in {"yes", "true", "1", "active"}:
+                continue
+
+            rule_category = str(
+                rule.get("Category", "All") or "All"
+            ).strip().lower()
+
+            requested_category = str(category or "").strip().lower()
+
+            if (
+                requested_category
+                and rule_category not in {"", "all", requested_category}
+            ):
+                continue
+
+            text = str(rule.get("Rule", "") or "").strip()
+
+            if text:
+                cleaned.append({
+                    "Rule_ID": str(rule.get("Rule_ID", "") or ""),
+                    "Rule": text,
+                    "Area": str(rule.get("Area", "General") or "General"),
+                    "Category": str(rule.get("Category", "All") or "All"),
+                    "Priority": str(rule.get("Priority", "Medium") or "Medium"),
+                    "Times_Reinforced": rule.get("Times_Reinforced", ""),
+                })
+
+        priority_order = {
+            "critical": 0,
+            "high": 1,
+            "medium": 2,
+            "low": 3,
+        }
+
+        cleaned.sort(
+            key=lambda rule: (
+                priority_order.get(
+                    str(rule.get("Priority", "medium")).lower(),
+                    2,
+                ),
+                -int(rule.get("Times_Reinforced") or 0)
+                if str(rule.get("Times_Reinforced") or "").isdigit()
+                else 0,
+            )
+        )
+
+        return cleaned[:limit]
+
+    except Exception:
+        return []
+
+
+def learned_rules_prompt(learned_rules):
+    if not learned_rules:
+        return "No additional learned preferences were returned."
+
+    lines = []
+
+    for index, rule in enumerate(learned_rules, 1):
+        area = str(rule.get("Area", "General") or "General")
+        category = str(rule.get("Category", "All") or "All")
+        priority = str(rule.get("Priority", "Medium") or "Medium")
+        text = str(rule.get("Rule", "") or "").strip()
+
+        if text:
+            lines.append(
+                f"{index}. [{priority} | {area} | {category}] {text}"
+            )
+
+    return "\n".join(lines) or (
+        "No additional learned preferences were returned."
+    )
+
+
+def required_item_type_tokens(draft, brain_profile=None):
+    candidates = [
+        draft.get("subcategory", ""),
+        draft.get("category", ""),
+        (brain_profile or {}).get("item_type", ""),
+    ]
+
+    ignored = {
+        "accessories",
+        "art",
+        "case",
+        "pieces",
+        "lighting",
+        "mirrors",
+        "seating",
+        "tables",
+        "unknown",
+    }
+
+    for candidate in candidates:
+        tokens = [
+            token for token in re.findall(
+                r"[a-z0-9]+",
+                str(candidate or "").lower(),
+            )
+            if len(token) > 2 and token not in ignored
+        ]
+
+        if tokens:
+            return tokens[:3]
+
+    return []
+
+
+def house_rule_validation(
+    draft,
+    brain_profile=None,
+):
+    title = str(draft.get("title", "") or "").strip()
+    description = str(draft.get("description", "") or "").strip()
+    category = str(draft.get("category", "") or "").strip()
+    style = str(draft.get("style", "") or "").strip()
+    period = str(draft.get("period", "") or "").strip()
+    country = str(draft.get("country", "") or "").strip()
+
+    title_lower = title.lower()
+    description_lower = description.lower()
+    category_lower = category.lower()
+
+    checks = []
+
+    def add_check(name, passed, detail, mandatory=True):
+        checks.append({
+            "name": name,
+            "passed": bool(passed),
+            "detail": detail,
+            "mandatory": bool(mandatory),
+        })
+
+    add_check(
+        "Title present",
+        bool(title),
+        "A title is required.",
+    )
+
+    add_check(
+        "Title length",
+        1 <= len(title) <= TITLE_MAX_CHARACTERS,
+        (
+            f"{len(title)} characters; maximum "
+            f"{TITLE_MAX_CHARACTERS}."
+        ),
+    )
+
+    date_pattern = re.compile(
+        r"\b(?:c\.|ca\.|circa|18\d{2}|19\d{2}|20\d{2}|"
+        r"18\d0s|19\d0s|20\d0s)\b",
+        flags=re.I,
+    )
+
+    add_check(
+        "No title date or circa language",
+        not bool(date_pattern.search(title)),
+        "Titles cannot include years, decades, c., ca., or circa.",
+    )
+
+    origin_terms = list(FORBIDDEN_TITLE_ORIGIN_TERMS)
+
+    if country:
+        origin_terms.append(country.lower())
+
+    title_origin_hits = sorted({
+        term for term in origin_terms
+        if term and re.search(
+            rf"\b{re.escape(term)}\b",
+            title_lower,
+        )
+    })
+
+    add_check(
+        "No place of origin in title",
+        not title_origin_hits,
+        (
+            "No origin wording detected."
+            if not title_origin_hits
+            else "Remove: " + ", ".join(title_origin_hits)
+        ),
+    )
+
+    item_type_tokens = required_item_type_tokens(
+        draft,
+        brain_profile,
+    )
+
+    includes_item_type = (
+        not item_type_tokens
+        or any(token in title_lower for token in item_type_tokens)
+    )
+
+    add_check(
+        "Title includes item type",
+        includes_item_type,
+        (
+            "Item type is present."
+            if includes_item_type
+            else "Expected one of: " + ", ".join(item_type_tokens)
+        ),
+    )
+
+    words = word_count(description)
+
+    add_check(
+        "Description length",
+        DESCRIPTION_MIN_WORDS <= words <= DESCRIPTION_MAX_WORDS,
+        (
+            f"{words} words; required range is "
+            f"{DESCRIPTION_MIN_WORDS}–{DESCRIPTION_MAX_WORDS}."
+        ),
+    )
+
+    opening_text = " ".join(
+        description_lower.split()[:8]
+    )
+
+    expected_openers = [
+        value.lower()
+        for value in [style, period]
+        if str(value or "").strip()
+    ] + STYLE_OPENERS
+
+    starts_with_style = any(
+        opening_text.startswith(opener)
+        for opener in expected_openers
+        if opener
+    )
+
+    add_check(
+        "Description begins with period or style",
+        starts_with_style,
+        (
+            "The opening uses the design period/style."
+            if starts_with_style
+            else "Begin with the design period or style."
+        ),
+    )
+
+    forbidden_hits = [
+        phrase for phrase in FORBIDDEN_DESCRIPTION_PHRASES
+        if phrase in description_lower
+    ]
+
+    add_check(
+        "No prohibited condition phrases",
+        not forbidden_hits,
+        (
+            "No prohibited wording detected."
+            if not forbidden_hits
+            else "Remove: " + "; ".join(forbidden_hits)
+        ),
+    )
+
+    if category_lower == "lighting":
+        add_check(
+            "Required lighting condition statement",
+            LIGHTING_CONDITION_SENTENCE in description,
+            (
+                "Required rewiring statement is present."
+                if LIGHTING_CONDITION_SENTENCE in description
+                else f'Include exactly: "{LIGHTING_CONDITION_SENTENCE}"'
+            ),
+        )
+
+    elif category_lower in FURNITURE_CATEGORIES:
+        add_check(
+            "Required furniture condition statement",
+            FURNITURE_CONDITION_SENTENCE in description,
+            (
+                "Required restored-condition statement is present."
+                if FURNITURE_CONDITION_SENTENCE in description
+                else f'Include exactly: "{FURNITURE_CONDITION_SENTENCE}"'
+            ),
+        )
+
+    mandatory_failures = [
+        check for check in checks
+        if check["mandatory"] and not check["passed"]
+    ]
+
+    return {
+        "checks": checks,
+        "mandatory_ok": not mandatory_failures,
+        "failures": mandatory_failures,
+        "description_word_count": words,
+        "title_character_count": len(title),
+    }
+
+
+def repair_house_rule_failures(
+    draft,
+    validation,
+    dims,
+    notes,
+    known_info,
+    target_price,
+    brain_matches=None,
+    brain_profile=None,
+    learned_rules=None,
+):
+    client = get_openai_client()
+
+    if client is None:
+        return {
+            "error": "No OPENAI_API_KEY found.",
+            "draft": draft,
+        }
+
+    failure_text = "\n".join(
+        f"- {failure['name']}: {failure['detail']}"
+        for failure in validation.get("failures", [])
+    )
+
+    prompt = f"""
+You are the final compliance editor for High Style Deco.
+
+Rewrite the draft so EVERY mandatory house rule passes.
+
+CURRENT DRAFT:
+{json.dumps(draft, indent=2)}
+
+FAILED RULES:
+{failure_text or "None"}
+
+ABSOLUTE HOUSE RULES:
+- Title: 80 characters maximum.
+- Title: include the specific item type.
+- Title: no place of origin.
+- Title: no years, dates, decades, circa, c., or ca.
+- Description: {DESCRIPTION_MIN_WORDS}–{DESCRIPTION_MAX_WORDS} words.
+- Description: begin immediately with the design period or style.
+- Preserve only supported facts.
+- Never use any of these phrases:
+  {json.dumps(FORBIDDEN_DESCRIPTION_PHRASES)}
+- Furniture must contain exactly:
+  "{FURNITURE_CONDITION_SENTENCE}"
+- Lighting must contain exactly:
+  "{LIGHTING_CONDITION_SENTENCE}"
+
+PERSISTENT LEARNED PREFERENCES:
+{learned_rules_prompt(learned_rules or [])}
+
+HIGH STYLE BRAIN PROFILE AND REFERENCES:
+{json.dumps({
+    "item_profile": brain_profile or {},
+    "similar_records": brain_matches or [],
+}, indent=2)}
+
+ITEM CONTEXT:
+Dimensions: {dims}
+Known info: {known_info or "None"}
+Notes: {notes or "None"}
+Target price: {target_price or "None"}
+
+Return ONLY valid JSON using the same field names as the current draft.
+Do not add commentary outside the JSON.
+"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[{
+                "role": "user",
+                "content": prompt,
+            }],
+            temperature=0.1,
+        )
+
+        repaired = parse_json(
+            response.choices[0].message.content
+        )
+        repaired["title"] = enforce_title(
+            repaired.get("title", "")
+        )
+
+        if not repaired.get("dimensions_formatted"):
+            repaired["dimensions_formatted"] = dims
+
+        return {
+            "error": "",
+            "draft": repaired,
+        }
+
+    except Exception as exc:
+        return {
+            "error": str(exc),
+            "draft": draft,
+        }
+
+
+def enforce_house_rules(
+    draft,
+    dims,
+    notes,
+    known_info,
+    target_price,
+    brain_matches=None,
+    brain_profile=None,
+    learned_rules=None,
+    max_repairs=2,
+):
+    current = dict(draft or {})
+    history = []
+
+    for attempt in range(max_repairs + 1):
+        validation = house_rule_validation(
+            current,
+            brain_profile,
+        )
+
+        if validation["mandatory_ok"]:
+            return {
+                "error": "",
+                "draft": current,
+                "validation": validation,
+                "repair_history": history,
+            }
+
+        if attempt >= max_repairs:
+            return {
+                "error": "",
+                "draft": current,
+                "validation": validation,
+                "repair_history": history,
+            }
+
+        repair_result = repair_house_rule_failures(
+            current,
+            validation,
+            dims,
+            notes,
+            known_info,
+            target_price,
+            brain_matches=brain_matches,
+            brain_profile=brain_profile,
+            learned_rules=learned_rules,
+        )
+
+        if repair_result.get("error"):
+            return {
+                "error": repair_result["error"],
+                "draft": current,
+                "validation": validation,
+                "repair_history": history,
+            }
+
+        repaired = repair_result.get("draft", current)
+
+        history.append({
+            "attempt": attempt + 1,
+            "failures_before": validation["failures"],
+            "word_count_before": validation[
+                "description_word_count"
+            ],
+            "title_length_before": validation[
+                "title_character_count"
+            ],
+        })
+
+        current = repaired
+
+    final_validation = house_rule_validation(
+        current,
+        brain_profile,
+    )
+
+    return {
+        "error": "",
+        "draft": current,
+        "validation": final_validation,
+        "repair_history": history,
+    }
+
 # -----------------------------
 # Generation helpers
 # -----------------------------
@@ -789,52 +1391,75 @@ def enforce_title(title):
         title = title[:80].rsplit(" ", 1)[0].strip(" ,.-")
     return title
 
-def base_prompt(dims, notes, known_info, target_price, brain_matches=None, brain_profile=None):
+def base_prompt(
+    dims,
+    notes,
+    known_info,
+    target_price,
+    brain_matches=None,
+    brain_profile=None,
+    learned_rules=None,
+):
     schema = {
-        "title": "max 80 chars, no origin/date/circa",
-        "description": "approx 200 words, starts with design period/style",
+        "title": "maximum 80 characters",
+        "description": "190–220 words",
         "suggested_price_usd": "number only",
         "category": "broad category",
-        "subcategory": "specific subcategory",
+        "subcategory": "specific item type",
         "style": "period/style",
         "period": "period or movement",
         "country": "metadata only",
         "designer_or_maker": "confirmed/attributed/Unknown",
         "materials": ["material 1", "material 2"],
-        "condition_notes": "positive condition language",
+        "condition_notes": "positive factual condition language",
         "seo_keywords": ["keyword 1", "keyword 2"],
         "ai_confidence_0_to_100": 0,
         "price_tag_text": "physical tag copy",
         "internal_notes_for_review": "what to verify",
-        "dimensions_formatted": dims
+        "dimensions_formatted": dims,
     }
 
     return f"""
 You are High Style Deco's inventory cataloging assistant.
 
 HIGH STYLE BRAIN REQUIREMENT:
-You MUST study the similar historical High Style Deco records before writing.
-Use their tone, structure, material language, and cataloging style.
-Do not copy them word-for-word. Write a fresh listing that belongs in the same catalog.
+Study the historical High Style Deco references before writing.
+Use their tone, structure, material language, specificity, and cataloging style.
+Do not copy them word-for-word.
 
-SIMILAR HIGH STYLE DECO RECORDS FROM V5:
-{json.dumps({"item_profile": brain_profile or {}, "similar_records": brain_matches or []}, indent=2)}
+SIMILAR HIGH STYLE DECO RECORDS:
+{json.dumps({
+    "item_profile": brain_profile or {},
+    "similar_records": brain_matches or [],
+}, indent=2)}
 
-TITLE RULES:
-- Max 80 characters.
-- No place of origin in title.
-- No years, dates, decades, circa, c., or ca.
-- Include item type and strongest descriptive features.
+PERSISTENT LEARNED PREFERENCES:
+These are prior corrections and rules reinforced through approved feedback.
+Apply every relevant active rule:
+{learned_rules_prompt(learned_rules or [])}
 
-DESCRIPTION RULES:
-- Approximately 200 words.
-- First words must be the design period/style, e.g. Art Deco, Mid-Century Modern, Modernist, Postmodern.
-- Do not start with place of origin.
-- Sales-focused High Style Deco / 1stDibs tone.
-- Describe the piece in the best light.
-- Never say: wear consistent with age and use, aged, age-related wear, minor imperfections, surface scratches.
-- Furniture: include exactly "Presented in excellent mint restored condition."
-- Lighting: include exactly "Excellent condition. This piece has been professionally rewired to US standards and is ready for installation."
+MANDATORY TITLE RULES:
+- Maximum {TITLE_MAX_CHARACTERS} characters.
+- Include the specific item type.
+- Do not include place of origin.
+- Do not include years, dates, decades, circa, c., or ca.
+- Use the strongest accurate descriptive features.
+- Do not state a maker as confirmed unless it is confirmed.
+
+MANDATORY DESCRIPTION RULES:
+- Write between {DESCRIPTION_MIN_WORDS} and {DESCRIPTION_MAX_WORDS} words.
+- Aim close to 200 words.
+- Begin immediately with the design period or style.
+- Do not begin with place of origin.
+- Use a polished High Style Deco / 1stDibs sales tone.
+- Describe form, construction, materials, finish, proportions, and visual details.
+- Never use:
+  {json.dumps(FORBIDDEN_DESCRIPTION_PHRASES)}
+- For furniture, include exactly:
+  "{FURNITURE_CONDITION_SENTENCE}"
+- For lighting, include exactly:
+  "{LIGHTING_CONDITION_SENTENCE}"
+- Never invent a maker, origin, material, date, or condition fact.
 
 Return ONLY valid JSON:
 {json.dumps(schema, indent=2)}
@@ -852,16 +1477,28 @@ Target price:
 {target_price or "None"}
 """
 
-def generate_draft(photos, dims, notes, known_info, target_price, brain_matches=None, brain_profile=None):
-    """
-    Final writing call is text-only.
 
-    Photos were already analyzed by quick_image_profile(), so resending them
-    here would duplicate the largest request and memory workload.
+def generate_draft(
+    photos,
+    dims,
+    notes,
+    known_info,
+    target_price,
+    brain_matches=None,
+    brain_profile=None,
+    learned_rules=None,
+):
+    """
+    Photos have already been analyzed by quick_image_profile().
+    This final writing call is text-only.
     """
     client = get_openai_client()
+
     if client is None:
-        return {"error": "No OPENAI_API_KEY found.", "draft": {}}
+        return {
+            "error": "No OPENAI_API_KEY found.",
+            "draft": {},
+        }
 
     prompt = base_prompt(
         dims,
@@ -869,103 +1506,190 @@ def generate_draft(photos, dims, notes, known_info, target_price, brain_matches=
         known_info,
         target_price,
         brain_matches,
-        brain_profile
+        brain_profile,
+        learned_rules,
     )
 
     try:
-        resp = client.chat.completions.create(
+        response = client.chat.completions.create(
             model="gpt-4.1-mini",
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            temperature=0.2
+            messages=[{
+                "role": "user",
+                "content": prompt,
+            }],
+            temperature=0.15,
         )
 
-        draft = parse_json(resp.choices[0].message.content)
-        draft["title"] = enforce_title(draft.get("title", ""))
+        draft = parse_json(
+            response.choices[0].message.content
+        )
+        draft["title"] = enforce_title(
+            draft.get("title", "")
+        )
 
-        if "dimensions_formatted" not in draft:
+        if not draft.get("dimensions_formatted"):
             draft["dimensions_formatted"] = dims
 
-        return {
-            "error": "",
-            "draft": draft
-        }
+        enforcement = enforce_house_rules(
+            draft,
+            dims,
+            notes,
+            known_info,
+            target_price,
+            brain_matches=brain_matches,
+            brain_profile=brain_profile,
+            learned_rules=learned_rules,
+            max_repairs=2,
+        )
+
+        return enforcement
 
     except Exception as exc:
         return {
             "error": str(exc),
-            "draft": {}
+            "draft": {},
+            "validation": {
+                "checks": [],
+                "mandatory_ok": False,
+                "failures": [],
+            },
+            "repair_history": [],
         }
 
-def retry_with_feedback(current_draft, feedback_context, dims, notes, known_info, target_price):
+
+def retry_with_feedback(
+    current_draft,
+    feedback_context,
+    dims,
+    notes,
+    known_info,
+    target_price,
+    brain_matches=None,
+    brain_profile=None,
+    learned_rules=None,
+):
     client = get_openai_client()
+
     if client is None:
-        return {"error": "No OPENAI_API_KEY found.", "draft": {}}
+        return {
+            "error": "No OPENAI_API_KEY found.",
+            "draft": {},
+        }
 
     schema = {
-        "title": "revised max 80 chars, no origin/date/circa",
-        "description": "revised approx 200 words",
+        "title": "revised maximum 80 characters",
+        "description": "revised 190–220 words",
         "suggested_price_usd": "revised number only",
         "category": "broad category",
-        "subcategory": "specific subcategory",
+        "subcategory": "specific item type",
         "style": "period/style",
         "period": "period or movement",
         "country": "metadata only",
         "designer_or_maker": "confirmed/attributed/Unknown",
         "materials": ["material 1", "material 2"],
-        "condition_notes": "positive condition language",
+        "condition_notes": "positive factual language",
         "seo_keywords": ["keyword 1", "keyword 2"],
         "ai_confidence_0_to_100": 0,
         "price_tag_text": "physical tag copy",
         "internal_notes_for_review": "what changed and what to verify",
-        "revision_summary": "brief summary of how feedback was applied",
-        "dimensions_formatted": dims
+        "revision_summary": "brief summary of applied feedback",
+        "dimensions_formatted": dims,
     }
 
     prompt = f"""
 You are revising a High Style Deco inventory draft.
 
-Use the user's feedback AND the High Style Brain examples to improve the draft BEFORE it is saved.
+The user's current feedback is the highest-priority editing instruction,
+unless it conflicts with a mandatory factual or house rule.
 
-IMPORTANT:
-- Do not simply return the same draft.
-- The revised title, description, price, or metadata must change meaningfully when feedback requests a change.
-- Treat user feedback as highest priority unless it conflicts with house rules.
-- Use high_style_brain_matches as the primary writing style reference.
-- Preserve dimensions exactly unless the user asks to change them.
+Do not return the same draft when a change was requested.
+Apply the feedback meaningfully.
 
 CURRENT DRAFT:
 {json.dumps(current_draft, indent=2)}
 
-USER FEEDBACK / EDITING INSTRUCTIONS:
+CURRENT USER FEEDBACK:
 {json.dumps(feedback_context, indent=2)}
 
-ORIGINAL ITEM CONTEXT:
+PERSISTENT LEARNED PREFERENCES FROM EARLIER APPROVALS:
+{learned_rules_prompt(learned_rules or [])}
+
+HIGH STYLE BRAIN PROFILE AND ACTUAL MATCHES:
+{json.dumps({
+    "item_profile": brain_profile or {},
+    "similar_records": brain_matches or [],
+}, indent=2)}
+
+MANDATORY RULES:
+- Title maximum: {TITLE_MAX_CHARACTERS} characters.
+- Title must include the item type.
+- Title cannot contain origin, years, dates, decades, circa, c., or ca.
+- Description must be {DESCRIPTION_MIN_WORDS}–{DESCRIPTION_MAX_WORDS} words.
+- Description must begin with the design period or style.
+- Never use:
+  {json.dumps(FORBIDDEN_DESCRIPTION_PHRASES)}
+- Furniture must include exactly:
+  "{FURNITURE_CONDITION_SENTENCE}"
+- Lighting must include exactly:
+  "{LIGHTING_CONDITION_SENTENCE}"
+- Preserve dimensions exactly unless feedback explicitly changes them.
+- Do not invent facts.
+
+ITEM CONTEXT:
 Dimensions: {dims}
 Known info: {known_info or "None"}
 Notes: {notes or "None"}
 Target price: {target_price or "None"}
 
-Return ONLY valid JSON using this schema:
+Return ONLY valid JSON:
 {json.dumps(schema, indent=2)}
 """
+
     try:
-        resp = client.chat.completions.create(
+        response = client.chat.completions.create(
             model="gpt-4.1-mini",
-            messages=[{"role": "user", "content": [{"type": "text", "text": prompt}]}],
-            temperature=0.2
+            messages=[{
+                "role": "user",
+                "content": prompt,
+            }],
+            temperature=0.15,
         )
-        draft = parse_json(resp.choices[0].message.content)
-        draft["title"] = enforce_title(draft.get("title", ""))
-        if "dimensions_formatted" not in draft:
+
+        draft = parse_json(
+            response.choices[0].message.content
+        )
+        draft["title"] = enforce_title(
+            draft.get("title", "")
+        )
+
+        if not draft.get("dimensions_formatted"):
             draft["dimensions_formatted"] = dims
-        return {"error": "", "draft": draft}
-    except Exception as e:
-        return {"error": str(e), "draft": {}}
+
+        enforcement = enforce_house_rules(
+            draft,
+            dims,
+            notes,
+            known_info,
+            target_price,
+            brain_matches=brain_matches,
+            brain_profile=brain_profile,
+            learned_rules=learned_rules,
+            max_repairs=2,
+        )
+
+        return enforcement
+
+    except Exception as exc:
+        return {
+            "error": str(exc),
+            "draft": {},
+            "validation": {
+                "checks": [],
+                "mandatory_ok": False,
+                "failures": [],
+            },
+            "repair_history": [],
+        }
 
 # -----------------------------
 # Google Sheet
@@ -1196,7 +1920,7 @@ if not st.session_state.get("authenticated"):
     login_gate()
 
 st.title(APP_TITLE)
-st.caption("Zero-Pandas Runtime + Smart Brain Index + Advanced Draft Manager.")
+st.caption("Enforced House Rules + Feedback Learning + Smart Brain Index.")
 
 current_user = st.session_state.get("current_user", "Unknown")
 current_role = st.session_state.get("current_role", "Employee")
@@ -1522,15 +2246,27 @@ if st.button("Generate Draft Item Record", type="primary"):
     generation_status.write("1 of 4 — Analyzing photos")
     brain_profile = quick_image_profile(photos, dims, known_info, notes)
 
-    generation_status.write("2 of 4 — Searching the Smart Brain Index")
+    generation_status.write("2 of 5 — Searching the Smart Brain Index")
     brain_matches = find_brain_matches(
-        brain_profile, dims, known_info, notes, top_n=6
+        brain_profile,
+        dims,
+        known_info,
+        notes,
+        top_n=6,
+    )
+
+    generation_status.write("3 of 5 — Loading learned preferences")
+    learned_rules = fetch_learned_rules(
+        web_app_url,
+        category=str(brain_profile.get("category", "") or ""),
+        limit=40,
     )
 
     st.session_state["brain_profile"] = brain_profile
     st.session_state["brain_matches"] = brain_matches
+    st.session_state["learned_rules"] = learned_rules
 
-    generation_status.write("3 of 4 — Writing title, description, and pricing")
+    generation_status.write("4 of 5 — Writing and validating the listing")
     result = generate_draft(
         photos,
         dims,
@@ -1538,10 +2274,11 @@ if st.button("Generate Draft Item Record", type="primary"):
         known_info,
         target_price,
         brain_matches=brain_matches,
-        brain_profile=brain_profile
+        brain_profile=brain_profile,
+        learned_rules=learned_rules,
     )
 
-    generation_status.write("4 of 4 — Finalizing draft")
+    generation_status.write("5 of 5 — Finalizing compliant draft")
     generation_status.update(
         label="Generation complete",
         state="complete",
@@ -1554,6 +2291,17 @@ if st.button("Generate Draft Item Record", type="primary"):
 
     st.session_state["draft"] = result["draft"]
     st.session_state["original_ai_draft"] = dict(result["draft"])
+    st.session_state["house_rule_validation"] = result.get(
+        "validation",
+        house_rule_validation(
+            result["draft"],
+            brain_profile,
+        ),
+    )
+    st.session_state["rule_repair_history"] = result.get(
+        "repair_history",
+        [],
+    )
     st.session_state["item_id"] = generate_item_id()
     st.session_state["photo_names"] = [p.name for p in photos]
     st.session_state["dims_inputs"] = {
@@ -1678,7 +2426,26 @@ if "draft" in st.session_state:
             "dimensions_formatted": dims_final
         })
         with st.spinner("Rewriting draft using your feedback and High Style Brain matches..."):
-            result = retry_with_feedback(current_draft_for_retry, feedback_context, dims_final, notes, known_info, target_price)
+            result = retry_with_feedback(
+                current_draft_for_retry,
+                feedback_context,
+                dims_final,
+                notes,
+                known_info,
+                target_price,
+                brain_matches=st.session_state.get(
+                    "brain_matches",
+                    [],
+                ),
+                brain_profile=st.session_state.get(
+                    "brain_profile",
+                    {},
+                ),
+                learned_rules=st.session_state.get(
+                    "learned_rules",
+                    [],
+                ),
+            )
         if result["error"]:
             st.error(result["error"])
         else:
@@ -1689,6 +2456,23 @@ if "draft" in st.session_state:
                 "after": result["draft"]
             })
             st.session_state["draft"] = result["draft"]
+            st.session_state["house_rule_validation"] = result.get(
+                "validation",
+                house_rule_validation(
+                    result["draft"],
+                    st.session_state.get(
+                        "brain_profile",
+                        {},
+                    ),
+                ),
+            )
+            st.session_state["rule_repair_history"] = (
+                st.session_state.get(
+                    "rule_repair_history",
+                    [],
+                )
+                + result.get("repair_history", [])
+            )
             st.session_state["dims_formatted"] = result["draft"].get("dimensions_formatted") or dims_final or st.session_state.get("dims_formatted", "")
             st.session_state["form_version"] = st.session_state.get("form_version", 0) + 1
             st.rerun()
@@ -1700,6 +2484,78 @@ if "draft" in st.session_state:
                 st.write("Feedback:", entry.get("feedback", {}).get("feedback_notes", ""))
                 st.write("Before title:", entry.get("before", {}).get("title", ""))
                 st.write("After title:", entry.get("after", {}).get("title", ""))
+
+    current_review_draft = {
+        "title": title,
+        "description": description,
+        "category": category,
+        "subcategory": subcategory,
+        "style": style,
+        "period": period,
+        "country": country,
+    }
+
+    live_house_validation = house_rule_validation(
+        current_review_draft,
+        st.session_state.get("brain_profile", {}),
+    )
+
+    st.subheader("House Rules Check")
+
+    learned_rule_count = len(
+        st.session_state.get("learned_rules", [])
+    )
+    repair_count = len(
+        st.session_state.get("rule_repair_history", [])
+    )
+
+    summary_col_1, summary_col_2, summary_col_3 = st.columns(3)
+
+    with summary_col_1:
+        st.metric(
+            "Description words",
+            live_house_validation["description_word_count"],
+            help=(
+                f"Required: {DESCRIPTION_MIN_WORDS}–"
+                f"{DESCRIPTION_MAX_WORDS} words"
+            ),
+        )
+
+    with summary_col_2:
+        st.metric(
+            "Learned rules applied",
+            learned_rule_count,
+        )
+
+    with summary_col_3:
+        st.metric(
+            "Automatic repairs",
+            repair_count,
+        )
+
+    for rule_check in live_house_validation["checks"]:
+        if rule_check["passed"]:
+            st.success(
+                f"✓ {rule_check['name']}: "
+                f"{rule_check['detail']}"
+            )
+        else:
+            st.error(
+                f"✗ {rule_check['name']}: "
+                f"{rule_check['detail']}"
+            )
+
+    if live_house_validation["mandatory_ok"]:
+        st.success(
+            "All mandatory house rules pass. "
+            "This listing is eligible for approval."
+        )
+    else:
+        st.warning(
+            "Approval is blocked until every mandatory "
+            "house rule passes. Edit the fields or use "
+            "Try Again With Feedback."
+        )
 
     st.subheader("Audit Trail Preview")
     audit_preview_metrics = summarize_audit_metrics(
@@ -1744,7 +2600,16 @@ if "draft" in st.session_state:
         st.warning("Google Sheet URL is missing from Streamlit secrets. Add GOOGLE_APPS_SCRIPT_URL in Streamlit app secrets.")
     elif not c_ok:
         st.warning("Cloudinary is not configured.")
-    elif st.button("Approve & Save to Google Sheet", type="primary"):
+    elif st.button(
+        "Approve & Save to Google Sheet",
+        type="primary",
+        disabled=not live_house_validation["mandatory_ok"],
+        help=(
+            None
+            if live_house_validation["mandatory_ok"]
+            else "Resolve the failed House Rules Check before approval."
+        ),
+    ):
         with st.spinner("Uploading primary image to Cloudinary..."):
             primary_url, upload_error = upload_to_cloudinary(st.session_state["photos_for_save"][0], item_id)
         if upload_error:
