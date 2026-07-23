@@ -695,9 +695,9 @@ def find_brain_matches(profile, dims, known_info, notes, top_n=6):
 # House Rules + Feedback Learning
 # -----------------------------
 
-DESCRIPTION_MIN_WORDS = 190
+DESCRIPTION_MIN_WORDS = 170
 DESCRIPTION_MAX_WORDS = 220
-DESCRIPTION_TARGET_WORDS = 205
+DESCRIPTION_TARGET_WORDS = 195
 TITLE_MAX_CHARACTERS = 80
 
 FORBIDDEN_DESCRIPTION_PHRASES = [
@@ -1445,7 +1445,7 @@ def base_prompt(
 ):
     schema = {
         "title": "maximum 80 characters",
-        "description": "190–220 words",
+        "description": "170–220 words",
         "suggested_price_usd": "number only",
         "category": "broad category",
         "subcategory": "specific item type",
@@ -1624,7 +1624,7 @@ def retry_with_feedback(
 
     schema = {
         "title": "revised maximum 80 characters",
-        "description": "revised 190–220 words",
+        "description": "revised 170–220 words",
         "suggested_price_usd": "revised number only",
         "category": "broad category",
         "subcategory": "specific item type",
@@ -2003,7 +2003,7 @@ if not st.session_state.get("authenticated"):
     login_gate()
 
 st.title(APP_TITLE)
-st.caption("Strict 190–220 word descriptions, no dimensions in copy, Master Inventory, and monthly Shoot Lists.")
+st.caption("Strict 170–220 word descriptions, no dimensions in copy, Master Inventory, and monthly Shoot Lists.")
 
 current_user = st.session_state.get("current_user", "Unknown")
 current_role = st.session_state.get("current_role", "Employee")
