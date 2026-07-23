@@ -17,7 +17,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Inventory Intake Task 3.4.4"
+APP_TITLE = "High Style AI – Version 3.5.1"
 
 # -----------------------------
 # State / Reset
@@ -697,6 +697,7 @@ def find_brain_matches(profile, dims, known_info, notes, top_n=6):
 
 DESCRIPTION_MIN_WORDS = 190
 DESCRIPTION_MAX_WORDS = 220
+DESCRIPTION_TARGET_WORDS = 205
 TITLE_MAX_CHARACTERS = 80
 
 FORBIDDEN_DESCRIPTION_PHRASES = [
@@ -925,6 +926,28 @@ def required_item_type_tokens(draft, brain_profile=None):
     return []
 
 
+
+def description_contains_dimensions(description):
+    """
+    Descriptions must not contain measurements. Dimensions belong only in the
+    dedicated dimensions field.
+    """
+    text = str(description or "")
+    patterns = [
+        r'\b\d+(?:\.\d+)?\s*(?:inches|inch|in\.|")\b',
+        r"\b\d+(?:\.\d+)?\s*(?:feet|foot|ft\.|')\b",
+        r'\b\d+(?:\.\d+)?\s*(?:cm|centimeters?|mm|millimeters?)\b',
+        r'\b(?:height|width|depth|diameter|seat height|body height)\s*[:\-]?\s*\d',
+        r'\b\d+(?:\.\d+)?\s*[x×]\s*\d+(?:\.\d+)?(?:\s*[x×]\s*\d+(?:\.\d+)?)?',
+    ]
+
+    hits = []
+    for pattern in patterns:
+        hits.extend(re.findall(pattern, text, flags=re.I))
+
+    return bool(hits), [str(hit) for hit in hits]
+
+
 def house_rule_validation(
     draft,
     brain_profile=None,
@@ -1023,11 +1046,28 @@ def house_rule_validation(
     words = word_count(description)
 
     add_check(
-        "Description length",
+        "Description length — mandatory",
         DESCRIPTION_MIN_WORDS <= words <= DESCRIPTION_MAX_WORDS,
         (
             f"{words} words; required range is "
             f"{DESCRIPTION_MIN_WORDS}–{DESCRIPTION_MAX_WORDS}."
+        ),
+    )
+
+    has_dimensions, dimension_hits = description_contains_dimensions(
+        description
+    )
+
+    add_check(
+        "No dimensions in description",
+        not has_dimensions,
+        (
+            "No measurements detected in the description."
+            if not has_dimensions
+            else (
+                "Remove measurements from the description. "
+                "Dimensions belong only in the dimensions field."
+            )
         ),
     )
 
@@ -1148,7 +1188,10 @@ ABSOLUTE HOUSE RULES:
 - Title: include the specific item type.
 - Title: no place of origin.
 - Title: no years, dates, decades, circa, c., or ca.
-- Description: {DESCRIPTION_MIN_WORDS}–{DESCRIPTION_MAX_WORDS} words.
+- Description: MUST be {DESCRIPTION_MIN_WORDS}–{DESCRIPTION_MAX_WORDS} words. This is non-negotiable.
+- Description: target exactly {DESCRIPTION_TARGET_WORDS} words and count the words before returning JSON.
+- When short, add supported descriptive language about form, silhouette, construction, materials, finish, proportions, craftsmanship, visual rhythm, and decorative details.
+- Description: no dimensions, measurements, height, width, depth, diameter, or numeric sizes. Keep all measurements only in dimensions_formatted.
 - Description: begin immediately with the design period or style.
 - Preserve only supported facts.
 - Never use any of these phrases:
@@ -1179,12 +1222,12 @@ Do not add commentary outside the JSON.
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4.1-mini",
+            model="gpt-4.1",
             messages=[{
                 "role": "user",
                 "content": prompt,
             }],
-            temperature=0.1,
+            temperature=0,
         )
 
         repaired = parse_json(
@@ -1218,7 +1261,7 @@ def enforce_house_rules(
     brain_matches=None,
     brain_profile=None,
     learned_rules=None,
-    max_repairs=2,
+    max_repairs=5,
 ):
     current = dict(draft or {})
     history = []
@@ -1447,8 +1490,11 @@ MANDATORY TITLE RULES:
 - Do not state a maker as confirmed unless it is confirmed.
 
 MANDATORY DESCRIPTION RULES:
-- Write between {DESCRIPTION_MIN_WORDS} and {DESCRIPTION_MAX_WORDS} words.
-- Aim close to 200 words.
+- The description MUST contain between {DESCRIPTION_MIN_WORDS} and {DESCRIPTION_MAX_WORDS} words. This is non-negotiable.
+- Target exactly {DESCRIPTION_TARGET_WORDS} words so the result remains safely inside the allowed range.
+- Count the words before returning JSON. If the count is below {DESCRIPTION_MIN_WORDS}, expand with supported descriptive language about form, silhouette, construction, materials, finish, proportions, craftsmanship, visual rhythm, and decorative details.
+- If the count is above {DESCRIPTION_MAX_WORDS}, tighten the prose before returning JSON.
+- Do NOT include dimensions, measurements, height, width, depth, diameter, or numeric sizes in the description. Dimensions belong only in dimensions_formatted.
 - Begin immediately with the design period or style.
 - Do not begin with place of origin.
 - Use a polished High Style Deco / 1stDibs sales tone.
@@ -1539,7 +1585,7 @@ def generate_draft(
             brain_matches=brain_matches,
             brain_profile=brain_profile,
             learned_rules=learned_rules,
-            max_repairs=2,
+            max_repairs=5,
         )
 
         return enforcement
@@ -1624,7 +1670,10 @@ MANDATORY RULES:
 - Title maximum: {TITLE_MAX_CHARACTERS} characters.
 - Title must include the item type.
 - Title cannot contain origin, years, dates, decades, circa, c., or ca.
-- Description must be {DESCRIPTION_MIN_WORDS}–{DESCRIPTION_MAX_WORDS} words.
+- Description MUST be {DESCRIPTION_MIN_WORDS}–{DESCRIPTION_MAX_WORDS} words. This is non-negotiable.
+- Target exactly {DESCRIPTION_TARGET_WORDS} words and count before returning.
+- If short, expand using supported descriptive language about form, silhouette, construction, materials, finish, proportions, craftsmanship, visual rhythm, and decorative details.
+- Do NOT put dimensions or measurements in the description. Keep them only in dimensions_formatted.
 - Description must begin with the design period or style.
 - Never use:
   {json.dumps(FORBIDDEN_DESCRIPTION_PHRASES)}
@@ -1674,7 +1723,7 @@ Return ONLY valid JSON:
             brain_matches=brain_matches,
             brain_profile=brain_profile,
             learned_rules=learned_rules,
-            max_repairs=2,
+            max_repairs=5,
         )
 
         return enforcement
@@ -1954,7 +2003,7 @@ if not st.session_state.get("authenticated"):
     login_gate()
 
 st.title(APP_TITLE)
-st.caption("Permanent Master Inventory + Automatic Monthly Shoot Lists + Enforced House Rules.")
+st.caption("Strict 190–220 word descriptions, no dimensions in copy, Master Inventory, and monthly Shoot Lists.")
 
 current_user = st.session_state.get("current_user", "Unknown")
 current_role = st.session_state.get("current_role", "Employee")
