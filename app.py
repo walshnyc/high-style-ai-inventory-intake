@@ -17,7 +17,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Version 3.5.1"
+APP_TITLE = "High Style AI – Version 3.5.3"
 
 # -----------------------------
 # State / Reset
@@ -1787,34 +1787,98 @@ def normalize_google_script_url(url):
     return url
 
 def send_to_google_sheet(url, payload):
+    """
+    Save an approved item and verify that Apps Script explicitly confirms
+    success. Previous versions treated any HTTP 200 response as successful,
+    even when Apps Script returned {"result": "error"}.
+    """
     url = normalize_google_script_url(url)
+
+    if not url:
+        return False, "Google Apps Script URL is missing."
+
     try:
-        r = requests.post(url, data=json.dumps(payload), headers={"Content-Type": "application/json"}, timeout=30, allow_redirects=True)
-        if r.status_code >= 400:
-            return False, f"HTTP {r.status_code}: {r.text[:500]}"
-        try:
-            data = r.json()
-            if data.get("result") == "success":
-                return True, "Saved to Google Sheet."
-            return True, f"Completed. Response: {data}"
-        except Exception:
-            if "success" in (r.text or "").lower():
-                return True, "Saved to Google Sheet."
-            return True, f"Completed. Response: {(r.text or '')[:500]}"
-    except Exception as e:
-        return False, str(e)
+        response = requests.post(
+            url,
+            data=json.dumps(payload),
+            headers={"Content-Type": "application/json"},
+            timeout=30,
+            allow_redirects=True,
+        )
+    except Exception as exc:
+        return False, f"Could not contact Google Apps Script: {exc}"
+
+    response_text = (response.text or "").strip()
+
+    if response.status_code >= 400:
+        return False, (
+            f"Google Apps Script returned HTTP {response.status_code}: "
+            f"{response_text[:1000]}"
+        )
+
+    try:
+        response_data = response.json()
+    except Exception:
+        return False, (
+            "Google Apps Script did not return valid JSON. "
+            f"Response: {response_text[:1000]}"
+        )
+
+    if response_data.get("result") != "success":
+        return False, (
+            "Google Sheet save failed. Apps Script response: "
+            f"{json.dumps(response_data, default=str)[:1500]}"
+        )
+
+    master_sheet = response_data.get("master_sheet", "Master_Inventory")
+    shoot_sheet = response_data.get("shoot_list_sheet", "")
+    item_id = response_data.get("item_id", payload.get("Item_ID", ""))
+
+    return True, (
+        f"Verified save for {item_id} in {master_sheet}"
+        + (f" and {shoot_sheet}" if shoot_sheet else "")
+        + "."
+    )
 
 def send_learning_log(url, payload):
     url = normalize_google_script_url(url)
     learning_payload = dict(payload)
     learning_payload["Action"] = "Learning_Log"
+
     try:
-        r = requests.post(url, data=json.dumps(learning_payload), headers={"Content-Type": "application/json"}, timeout=30, allow_redirects=True)
-        if r.status_code >= 400:
-            return False, f"Learning log HTTP {r.status_code}: {r.text[:500]}"
-        return True, "Learning feedback sent."
-    except Exception as e:
-        return False, str(e)
+        response = requests.post(
+            url,
+            data=json.dumps(learning_payload),
+            headers={"Content-Type": "application/json"},
+            timeout=30,
+            allow_redirects=True,
+        )
+    except Exception as exc:
+        return False, f"Could not contact Google Apps Script: {exc}"
+
+    response_text = (response.text or "").strip()
+
+    if response.status_code >= 400:
+        return False, (
+            f"Learning log returned HTTP {response.status_code}: "
+            f"{response_text[:1000]}"
+        )
+
+    try:
+        response_data = response.json()
+    except Exception:
+        return False, (
+            "Learning log did not return valid JSON. "
+            f"Response: {response_text[:1000]}"
+        )
+
+    if response_data.get("result") != "success":
+        return False, (
+            "Learning log failed. Apps Script response: "
+            f"{json.dumps(response_data, default=str)[:1500]}"
+        )
+
+    return True, "Learning feedback verified in Learning_Log."
 
 
 
@@ -2003,7 +2067,7 @@ if not st.session_state.get("authenticated"):
     login_gate()
 
 st.title(APP_TITLE)
-st.caption("Strict 170–220 word descriptions, no dimensions in copy, Master Inventory, and monthly Shoot Lists.")
+st.caption("Verified Google Sheet saves, strict 170–220 word descriptions, and monthly Shoot Lists.")
 
 current_user = st.session_state.get("current_user", "Unknown")
 current_role = st.session_state.get("current_role", "Employee")
@@ -2829,10 +2893,7 @@ if "draft" in st.session_state:
         with st.spinner("Sending learning log..."):
             log_ok, log_msg = send_learning_log(web_app_url, learning_payload)
 
-        st.success(
-            f"Approved item saved to Master_Inventory and "
-            f"{shoot_list_tab_name(shoot_month)}."
-        )
+        st.success(msg)
         if log_ok:
             st.success("Feedback, retry history, and Brain matches saved to Learning_Log.")
         else:
