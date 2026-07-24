@@ -17,7 +17,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Version 3.5.3"
+APP_TITLE = "High Style AI – Version 3.5.4"
 
 # -----------------------------
 # State / Reset
@@ -2067,7 +2067,7 @@ if not st.session_state.get("authenticated"):
     login_gate()
 
 st.title(APP_TITLE)
-st.caption("Verified Google Sheet saves, strict 170–220 word descriptions, and monthly Shoot Lists.")
+st.caption("Cleaner intake workflow, verified Google Sheet saves, and strict 170–220 word descriptions.")
 
 current_user = st.session_state.get("current_user", "Unknown")
 current_role = st.session_state.get("current_role", "Employee")
@@ -2102,10 +2102,6 @@ with st.sidebar:
         st.success(brain_message)
     else:
         st.warning(brain_message)
-
-    if st.button("Start New Entry / Clear Current Form"):
-        clear_entry_state()
-        st.rerun()
 
 
 st.subheader("Draft Dashboard")
@@ -2408,7 +2404,27 @@ with draft_col1:
 with draft_col2:
     st.caption("Use Save Draft when you only have photos or partial notes. Come back later, add missing details, then generate and approve.")
 
-if st.button("Generate Draft Item Record", type="primary"):
+generate_col, new_entry_col = st.columns([2, 1])
+
+with generate_col:
+    generate_draft_clicked = st.button(
+        "Generate Draft Item Record",
+        type="primary",
+        use_container_width=True,
+    )
+
+with new_entry_col:
+    start_new_entry_clicked = st.button(
+        "Start New Entry",
+        use_container_width=True,
+        help="Clear the current form and begin a completely new inventory item.",
+    )
+
+if start_new_entry_clicked:
+    clear_entry_state()
+    st.rerun()
+
+if generate_draft_clicked:
     if not photos:
         st.warning("Upload a photo or load a saved draft containing photos.")
         st.stop()
