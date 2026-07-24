@@ -17,7 +17,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Version 3.6"
+APP_TITLE = "High Style AI – Version 3.6.1"
 
 # -----------------------------
 # State / Reset
@@ -2345,6 +2345,10 @@ with approved_tab:
             key_prefix="approved_stage_gallery",
             columns_count=4,
         )
+
+# Restore the currently selected draft before rendering the intake form.
+# This line was accidentally removed during the Version 3.6 dashboard refactor.
+loaded_draft = st.session_state.get("loaded_draft", {})
 
 st.header("1. Upload item photos")
 
