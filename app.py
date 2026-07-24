@@ -17,7 +17,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Version 3.6.1"
+APP_TITLE = "High Style AI – Version 3.6.3"
 
 # -----------------------------
 # State / Reset
@@ -2007,7 +2007,7 @@ def display_draft_thumbnail_gallery(drafts, allow_load=True, key_prefix="gallery
                 draft.get("Last_Updated", "") or draft.get("Submitted_Date", "")
             )
             known_info = str(draft.get("Known_Info", "") or "").strip()
-            short_note = known_info[:70] + ("…" if len(known_info) > 70 else "")
+            short_note = known_info[:48] + ("…" if len(known_info) > 48 else "")
 
             with columns[offset]:
                 with st.container(border=True):
@@ -2030,14 +2030,14 @@ def display_draft_thumbnail_gallery(drafts, allow_load=True, key_prefix="gallery
 
                     if allow_load:
                         if st.button(
-                            "Open Draft",
+                            "Open",
                             type="primary",
                             use_container_width=True,
                             key=f"{key_prefix}_open_{index}_{draft_id}",
                         ):
                             load_draft_into_editor(draft)
 
-                    with st.expander("Details"):
+                    with st.expander("More"):
                         display_draft_card(
                             draft,
                             allow_load=False,
@@ -2165,11 +2165,41 @@ def display_draft_card(draft, allow_load=False, allow_delete=False, key_prefix="
 init_state()
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
+st.markdown(
+    """
+    <style>
+    .block-container {
+        padding-top: 1.4rem;
+        padding-bottom: 3rem;
+        max-width: 1450px;
+    }
+    h1, h2, h3 {
+        letter-spacing: -0.02em;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        border-radius: 14px;
+    }
+    .stCaption, div[data-testid="stCaptionContainer"] {
+        color: #6b7280;
+    }
+    div.stButton > button:not([kind="primary"]) {
+        border-color: #d1d5db;
+        background: #ffffff;
+    }
+    div[data-testid="stAlert"] {
+        padding-top: 0.75rem;
+        padding-bottom: 0.75rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 if not st.session_state.get("authenticated"):
     login_gate()
 
 st.title(APP_TITLE)
-st.caption("Three-stage visual workflow: Drafts, Ready for Review, and Approved.")
+st.caption("A cleaner, more focused inventory workflow for staff.")
 
 current_user = st.session_state.get("current_user", "Unknown")
 current_role = st.session_state.get("current_role", "Employee")
@@ -2206,11 +2236,17 @@ with st.sidebar:
         st.warning(brain_message)
 
 
-st.subheader("Draft Dashboard")
-
-refresh_col, count_col = st.columns([1, 3])
+dashboard_title_col, refresh_col = st.columns([6, 1])
+with dashboard_title_col:
+    st.subheader("Saved Work")
 with refresh_col:
-    if st.button("Refresh Draft Dashboard"):
+    refresh_dashboard_clicked = st.button(
+        "↻ Refresh",
+        use_container_width=True,
+        help="Refresh saved drafts from Google Sheets.",
+    )
+
+if refresh_dashboard_clicked:
         if not web_app_url:
             st.warning("Google Sheet URL is missing from secrets.")
         else:
@@ -2240,13 +2276,6 @@ completed_drafts = [
     if str(draft.get("Status", "")).strip().lower() == "completed"
 ]
 
-with count_col:
-    metric_1, metric_2 = st.columns(2)
-    with metric_1:
-        st.metric("Active drafts", len(active_drafts))
-    with metric_2:
-        st.metric("Completed drafts", len(completed_drafts))
-
 draft_stage_items = [
     draft for draft in active_drafts
     if draft_workflow_status(draft)[0] == "Draft"
@@ -2259,16 +2288,16 @@ approved_stage_items = completed_drafts
 
 draft_tab, review_tab, approved_tab = st.tabs([
     f"🟠 Drafts ({len(draft_stage_items)})",
-    f"🔵 Ready for Review ({len(review_stage_items)})",
+    f"🔵 Review ({len(review_stage_items)})",
     f"🟢 Approved ({len(approved_stage_items)})",
 ])
 
 with draft_tab:
-    st.caption("Items that still need information before generation.")
+    st.caption("Continue incomplete items.")
 
     draft_search = st.text_input(
         "Search drafts",
-        placeholder="Search by Draft ID, employee, date, notes, or dimensions",
+        placeholder="Search drafts",
         key="draft_stage_search",
     )
     filtered_drafts = [
@@ -2279,23 +2308,21 @@ with draft_tab:
     filtered_drafts = sorted(filtered_drafts, key=draft_sort_key, reverse=True)
 
     if not filtered_drafts:
-        st.info("No drafts match this search.")
+        st.caption("No drafts currently.")
     else:
         display_draft_thumbnail_gallery(
             filtered_drafts,
             allow_load=True,
             key_prefix="draft_stage_gallery",
-            columns_count=4,
+            columns_count=5,
         )
 
 with review_tab:
-    st.caption(
-        "Complete intake drafts ready to generate, review, refine, and approve."
-    )
+    st.caption("Generate, review, refine, and approve.")
 
     review_search = st.text_input(
         "Search items ready for review",
-        placeholder="Search by Draft ID, employee, date, notes, or dimensions",
+        placeholder="Search drafts",
         key="review_stage_search",
     )
     filtered_review = [
@@ -2306,23 +2333,21 @@ with review_tab:
     filtered_review = sorted(filtered_review, key=draft_sort_key, reverse=True)
 
     if not filtered_review:
-        st.info("No items are currently ready for review.")
+        st.caption("Nothing is waiting for review.")
     else:
         display_draft_thumbnail_gallery(
             filtered_review,
             allow_load=True,
             key_prefix="review_stage_gallery",
-            columns_count=4,
+            columns_count=5,
         )
 
 with approved_tab:
-    st.caption(
-        "Approved items saved to Master_Inventory and the selected monthly Shoot List."
-    )
+    st.caption("Saved to Master Inventory and the selected Shoot List.")
 
     approved_search = st.text_input(
         "Search approved items",
-        placeholder="Search by Draft ID, employee, approval date, notes, or dimensions",
+        placeholder="Search approved items",
         key="approved_stage_search",
     )
     filtered_approved = [
@@ -2337,18 +2362,50 @@ with approved_tab:
     )
 
     if not filtered_approved:
-        st.info("No approved items match this search.")
+        st.caption("No approved items currently.")
     else:
         display_draft_thumbnail_gallery(
             filtered_approved,
             allow_load=False,
             key_prefix="approved_stage_gallery",
-            columns_count=4,
+            columns_count=5,
         )
+
+st.markdown(
+    """
+    <div style="
+        display:flex;
+        gap:10px;
+        flex-wrap:wrap;
+        align-items:center;
+        padding:12px 14px;
+        margin:8px 0 18px 0;
+        border:1px solid #e5e7eb;
+        border-radius:12px;
+        background:#fafafa;
+        font-size:0.92rem;
+        color:#4b5563;">
+        <strong style="color:#111827;">Workflow</strong>
+        <span>Photos</span><span>→</span>
+        <span>Details</span><span>→</span>
+        <span>Dimensions</span><span>→</span>
+        <span>Generate</span><span>→</span>
+        <span>Review</span><span>→</span>
+        <span>Approve</span>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 # Restore the currently selected draft before rendering the intake form.
 # This line was accidentally removed during the Version 3.6 dashboard refactor.
 loaded_draft = st.session_state.get("loaded_draft", {})
+
+with st.expander("How this works", expanded=False):
+    st.write(
+        "Upload photos, enter what you know, add dimensions, generate the draft, "
+        "review the listing, then approve it to save it to Master Inventory and the selected Shoot List."
+    )
 
 st.header("1. Upload item photos")
 
@@ -2499,14 +2556,14 @@ generate_col, new_entry_col = st.columns([2, 1])
 
 with generate_col:
     generate_draft_clicked = st.button(
-        "Generate Draft Item Record",
+        "Generate Draft",
         type="primary",
         use_container_width=True,
     )
 
 with new_entry_col:
     start_new_entry_clicked = st.button(
-        "Start New Entry",
+        "New Entry",
         use_container_width=True,
         help="Clear the current form and begin a completely new inventory item.",
     )
