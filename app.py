@@ -17,7 +17,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Version 3.5.4"
+APP_TITLE = "High Style AI – Version 3.5.5"
 
 # -----------------------------
 # State / Reset
@@ -1936,6 +1936,81 @@ def draft_sort_key(draft):
         parse_datetime_value(draft.get("Completed_Date", "")),
     )
 
+def load_draft_into_editor(draft):
+    """Restore a saved draft and its Cloudinary photos into the intake form."""
+    with st.spinner("Connecting saved Cloudinary photos to this draft..."):
+        restored_photos, restore_errors = restore_draft_photos(draft)
+
+    st.session_state["loaded_draft"] = draft
+    st.session_state["restored_draft_photos"] = restored_photos
+    st.session_state["restored_photo_errors"] = restore_errors
+    st.session_state["form_version"] = st.session_state.get("form_version", 0) + 1
+    st.session_state["uploader_version"] = st.session_state.get("uploader_version", 0) + 1
+    st.rerun()
+
+
+def display_draft_thumbnail_gallery(drafts, allow_load=True, key_prefix="gallery", columns_count=4):
+    """
+    Compact visual gallery for quickly finding drafts.
+    Each card shows the primary photo, readiness, date, and an action button.
+    """
+    if not drafts:
+        return
+
+    columns_count = max(2, min(int(columns_count or 4), 5))
+
+    for row_start in range(0, len(drafts), columns_count):
+        row_drafts = drafts[row_start:row_start + columns_count]
+        columns = st.columns(columns_count)
+
+        for offset, draft in enumerate(row_drafts):
+            index = row_start + offset
+            draft_id = str(draft.get("Draft_ID", "Saved Draft") or "Saved Draft")
+            photo_urls = parse_draft_photo_urls(draft)
+            status_label, status_icon = draft_readiness(draft)
+            updated_date = friendly_date(
+                draft.get("Last_Updated", "") or draft.get("Submitted_Date", "")
+            )
+            known_info = str(draft.get("Known_Info", "") or "").strip()
+            short_note = known_info[:70] + ("…" if len(known_info) > 70 else "")
+
+            with columns[offset]:
+                with st.container(border=True):
+                    if photo_urls:
+                        st.image(photo_urls[0], width="stretch")
+                    else:
+                        st.markdown(
+                            "<div style='height:170px;display:flex;align-items:center;"
+                            "justify-content:center;border:1px dashed #aaa;border-radius:8px;"
+                            "color:#777;'>No photo</div>",
+                            unsafe_allow_html=True,
+                        )
+
+                    st.markdown(f"**{draft_id}**")
+                    st.caption(f"{status_icon} {status_label}")
+                    if updated_date:
+                        st.caption(updated_date)
+                    if short_note:
+                        st.caption(short_note)
+
+                    if allow_load:
+                        if st.button(
+                            "Open Draft",
+                            type="primary",
+                            use_container_width=True,
+                            key=f"{key_prefix}_open_{index}_{draft_id}",
+                        ):
+                            load_draft_into_editor(draft)
+
+                    with st.expander("Details"):
+                        display_draft_card(
+                            draft,
+                            allow_load=False,
+                            allow_delete=allow_load,
+                            key_prefix=f"{key_prefix}_detail_{index}",
+                        )
+
+
 def display_draft_card(draft, allow_load=False, allow_delete=False, key_prefix="draft"):
     photo_urls = parse_draft_photo_urls(draft)
     status_label, status_icon = draft_readiness(draft)
@@ -2001,15 +2076,7 @@ def display_draft_card(draft, allow_load=False, allow_delete=False, key_prefix="
                     width="stretch",
                     key=f"{key_prefix}_load_{draft_id}"
                 ):
-                    with st.spinner("Connecting saved Cloudinary photos to this draft..."):
-                        restored_photos, restore_errors = restore_draft_photos(draft)
-
-                    st.session_state["loaded_draft"] = draft
-                    st.session_state["restored_draft_photos"] = restored_photos
-                    st.session_state["restored_photo_errors"] = restore_errors
-                    st.session_state["form_version"] = st.session_state.get("form_version", 0) + 1
-                    st.session_state["uploader_version"] = st.session_state.get("uploader_version", 0) + 1
-                    st.rerun()
+                    load_draft_into_editor(draft)
 
         if allow_delete:
             with button_cols[1]:
@@ -2067,7 +2134,7 @@ if not st.session_state.get("authenticated"):
     login_gate()
 
 st.title(APP_TITLE)
-st.caption("Cleaner intake workflow, verified Google Sheet saves, and strict 170–220 word descriptions.")
+st.caption("Thumbnail draft gallery, cleaner intake workflow, and verified Google Sheet saves.")
 
 current_user = st.session_state.get("current_user", "Unknown")
 current_role = st.session_state.get("current_role", "Employee")
@@ -2193,21 +2260,18 @@ with active_tab:
                 )
             )
 
-        for index, draft in enumerate(filtered_active):
-            status_label, status_icon = draft_readiness(draft)
-            label = (
-                f"{status_icon} {draft.get('Draft_ID', 'Draft')} — "
-                f"{status_label} — "
-                f"{draft.get('Submitted_By', '')} — "
-                f"{friendly_date(draft.get('Last_Updated', '') or draft.get('Submitted_Date', ''))}"
+        if not filtered_active:
+            st.info("No active drafts match this search.")
+        else:
+            st.caption(
+                "Scroll through the image gallery and select Open Draft to continue working."
             )
-            with st.expander(label, expanded=(len(filtered_active) == 1)):
-                display_draft_card(
-                    draft,
-                    allow_load=True,
-                    allow_delete=True,
-                    key_prefix=f"active_{index}"
-                )
+            display_draft_thumbnail_gallery(
+                filtered_active,
+                allow_load=True,
+                key_prefix="active_gallery",
+                columns_count=4,
+            )
 
 with completed_tab:
     st.caption("Finished drafts are kept here as a searchable archive.")
@@ -2242,19 +2306,15 @@ with completed_tab:
             reverse=(completed_sort == "Newest completed first")
         )
 
-        for index, draft in enumerate(filtered_completed):
-            label = (
-                f"✅ {draft.get('Draft_ID', 'Draft')} — "
-                f"Completed by {draft.get('Completed_By', '')} — "
-                f"{friendly_date(draft.get('Completed_Date', ''))}"
+        if not filtered_completed:
+            st.info("No completed drafts match this search.")
+        else:
+            display_draft_thumbnail_gallery(
+                filtered_completed,
+                allow_load=False,
+                key_prefix="completed_gallery",
+                columns_count=4,
             )
-            with st.expander(label, expanded=False):
-                display_draft_card(
-                    draft,
-                    allow_load=False,
-                    allow_delete=False,
-                    key_prefix=f"completed_{index}"
-                )
 
 loaded_draft = st.session_state.get("loaded_draft", {})
 
