@@ -17,7 +17,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Version 3.5.5"
+APP_TITLE = "High Style AI – Version 3.6"
 
 # -----------------------------
 # State / Reset
@@ -1900,22 +1900,57 @@ def draft_missing_fields(draft):
     }
     return [label for label, value in required.items() if not str(value or "").strip()]
 
-def draft_readiness(draft):
+def draft_workflow_status(draft):
+    """
+    Canonical three-stage workflow status.
+
+    Approved always takes priority over field-completeness checks. This fixes
+    completed items incorrectly displaying as In Progress merely because an
+    optional intake field is blank.
+    """
+    raw_status = str(draft.get("Status", "") or "").strip().lower()
+    completed_date = str(draft.get("Completed_Date", "") or "").strip()
+    approved_date = str(draft.get("Approved_Date", "") or "").strip()
+
+    if (
+        raw_status in {"completed", "approved"}
+        or completed_date
+        or approved_date
+    ):
+        return "Approved", "🟢"
+
+    generated_markers = [
+        draft.get("Generated_Title", ""),
+        draft.get("AI_Title", ""),
+        draft.get("Original_AI_Title", ""),
+        draft.get("Generated_Description", ""),
+        draft.get("AI_Description", ""),
+        draft.get("Original_AI_Description", ""),
+    ]
+    if any(str(value or "").strip() for value in generated_markers):
+        return "Ready for Review", "🔵"
+
     missing = draft_missing_fields(draft)
     has_photos = bool(parse_draft_photo_urls(draft))
     has_known_info = bool(str(draft.get("Known_Info", "") or "").strip())
     has_dimensions = any(
         str(draft.get(field, "") or "").strip()
-        for field in ["Height_in", "Width_in", "Depth_in", "Diameter_in", "Body_Height_in", "Seat_Height_in"]
+        for field in [
+            "Height_in", "Width_in", "Depth_in", "Diameter_in",
+            "Body_Height_in", "Seat_Height_in"
+        ]
     )
 
-    if not has_photos:
-        return "Needs Photos", "🔴"
-    if not has_dimensions or not has_known_info:
-        return "Needs Info", "🟡"
-    if not missing:
-        return "Ready to Generate", "🟢"
-    return "In Progress", "🟠"
+    # A complete intake draft is ready for the generation/review stage.
+    if has_photos and has_known_info and has_dimensions and not missing:
+        return "Ready for Review", "🔵"
+
+    return "Draft", "🟠"
+
+
+def draft_readiness(draft):
+    """Backward-compatible wrapper used by existing card components."""
+    return draft_workflow_status(draft)
 
 def draft_search_blob(draft):
     return " ".join([
@@ -1952,7 +1987,7 @@ def load_draft_into_editor(draft):
 def display_draft_thumbnail_gallery(drafts, allow_load=True, key_prefix="gallery", columns_count=4):
     """
     Compact visual gallery for quickly finding drafts.
-    Each card shows the primary photo, readiness, date, and an action button.
+    Each card shows the primary photo, workflow status, date, and an action button.
     """
     if not drafts:
         return
@@ -2134,7 +2169,7 @@ if not st.session_state.get("authenticated"):
     login_gate()
 
 st.title(APP_TITLE)
-st.caption("Thumbnail draft gallery, cleaner intake workflow, and verified Google Sheet saves.")
+st.caption("Three-stage visual workflow: Drafts, Ready for Review, and Approved.")
 
 current_user = st.session_state.get("current_user", "Unknown")
 current_role = st.session_state.get("current_role", "Employee")
@@ -2212,112 +2247,104 @@ with count_col:
     with metric_2:
         st.metric("Completed drafts", len(completed_drafts))
 
-active_tab, completed_tab = st.tabs(["Active Drafts", "Completed Drafts"])
+draft_stage_items = [
+    draft for draft in active_drafts
+    if draft_workflow_status(draft)[0] == "Draft"
+]
+review_stage_items = [
+    draft for draft in active_drafts
+    if draft_workflow_status(draft)[0] == "Ready for Review"
+]
+approved_stage_items = completed_drafts
 
-with active_tab:
-    st.caption("Your current inventory to-do list.")
+draft_tab, review_tab, approved_tab = st.tabs([
+    f"🟠 Drafts ({len(draft_stage_items)})",
+    f"🔵 Ready for Review ({len(review_stage_items)})",
+    f"🟢 Approved ({len(approved_stage_items)})",
+])
 
-    if not active_drafts:
-        st.success("No active drafts. The queue is clear.")
+with draft_tab:
+    st.caption("Items that still need information before generation.")
+
+    draft_search = st.text_input(
+        "Search drafts",
+        placeholder="Search by Draft ID, employee, date, notes, or dimensions",
+        key="draft_stage_search",
+    )
+    filtered_drafts = [
+        draft for draft in draft_stage_items
+        if not draft_search.strip()
+        or draft_search.lower().strip() in draft_search_blob(draft)
+    ]
+    filtered_drafts = sorted(filtered_drafts, key=draft_sort_key, reverse=True)
+
+    if not filtered_drafts:
+        st.info("No drafts match this search.")
     else:
-        control_1, control_2 = st.columns([2, 1])
-        with control_1:
-            active_query = st.text_input(
-                "Search active drafts",
-                placeholder="Search by Draft ID, employee, notes, dimensions, or known information",
-                key="active_draft_search"
-            ).strip().lower()
-        with control_2:
-            active_sort = st.selectbox(
-                "Sort active drafts",
-                ["Newest first", "Oldest first", "Readiness"],
-                key="active_draft_sort"
-            )
-
-        filtered_active = active_drafts
-        if active_query:
-            filtered_active = [
-                draft for draft in active_drafts
-                if active_query in draft_search_blob(draft)
-            ]
-
-        if active_sort == "Newest first":
-            filtered_active = sorted(filtered_active, key=draft_sort_key, reverse=True)
-        elif active_sort == "Oldest first":
-            filtered_active = sorted(filtered_active, key=draft_sort_key)
-        else:
-            readiness_order = {
-                "Ready to Generate": 0,
-                "In Progress": 1,
-                "Needs Info": 2,
-                "Needs Photos": 3,
-            }
-            filtered_active = sorted(
-                filtered_active,
-                key=lambda draft: (
-                    readiness_order.get(draft_readiness(draft)[0], 9),
-                    -draft_sort_key(draft).timestamp() if draft_sort_key(draft) != datetime.min else 0
-                )
-            )
-
-        if not filtered_active:
-            st.info("No active drafts match this search.")
-        else:
-            st.caption(
-                "Scroll through the image gallery and select Open Draft to continue working."
-            )
-            display_draft_thumbnail_gallery(
-                filtered_active,
-                allow_load=True,
-                key_prefix="active_gallery",
-                columns_count=4,
-            )
-
-with completed_tab:
-    st.caption("Finished drafts are kept here as a searchable archive.")
-
-    if not completed_drafts:
-        st.info("No completed drafts are available yet.")
-    else:
-        control_1, control_2 = st.columns([2, 1])
-        with control_1:
-            completed_query = st.text_input(
-                "Search completed drafts",
-                placeholder="Search by Draft ID, employee, completion date, notes, or dimensions",
-                key="completed_draft_search"
-            ).strip().lower()
-        with control_2:
-            completed_sort = st.selectbox(
-                "Sort completed drafts",
-                ["Newest completed first", "Oldest completed first"],
-                key="completed_draft_sort"
-            )
-
-        filtered_completed = completed_drafts
-        if completed_query:
-            filtered_completed = [
-                draft for draft in completed_drafts
-                if completed_query in draft_search_blob(draft)
-            ]
-
-        filtered_completed = sorted(
-            filtered_completed,
-            key=draft_sort_key,
-            reverse=(completed_sort == "Newest completed first")
+        display_draft_thumbnail_gallery(
+            filtered_drafts,
+            allow_load=True,
+            key_prefix="draft_stage_gallery",
+            columns_count=4,
         )
 
-        if not filtered_completed:
-            st.info("No completed drafts match this search.")
-        else:
-            display_draft_thumbnail_gallery(
-                filtered_completed,
-                allow_load=False,
-                key_prefix="completed_gallery",
-                columns_count=4,
-            )
+with review_tab:
+    st.caption(
+        "Complete intake drafts ready to generate, review, refine, and approve."
+    )
 
-loaded_draft = st.session_state.get("loaded_draft", {})
+    review_search = st.text_input(
+        "Search items ready for review",
+        placeholder="Search by Draft ID, employee, date, notes, or dimensions",
+        key="review_stage_search",
+    )
+    filtered_review = [
+        draft for draft in review_stage_items
+        if not review_search.strip()
+        or review_search.lower().strip() in draft_search_blob(draft)
+    ]
+    filtered_review = sorted(filtered_review, key=draft_sort_key, reverse=True)
 
+    if not filtered_review:
+        st.info("No items are currently ready for review.")
+    else:
+        display_draft_thumbnail_gallery(
+            filtered_review,
+            allow_load=True,
+            key_prefix="review_stage_gallery",
+            columns_count=4,
+        )
+
+with approved_tab:
+    st.caption(
+        "Approved items saved to Master_Inventory and the selected monthly Shoot List."
+    )
+
+    approved_search = st.text_input(
+        "Search approved items",
+        placeholder="Search by Draft ID, employee, approval date, notes, or dimensions",
+        key="approved_stage_search",
+    )
+    filtered_approved = [
+        draft for draft in approved_stage_items
+        if not approved_search.strip()
+        or approved_search.lower().strip() in draft_search_blob(draft)
+    ]
+    filtered_approved = sorted(
+        filtered_approved,
+        key=draft_sort_key,
+        reverse=True,
+    )
+
+    if not filtered_approved:
+        st.info("No approved items match this search.")
+    else:
+        display_draft_thumbnail_gallery(
+            filtered_approved,
+            allow_load=False,
+            key_prefix="approved_stage_gallery",
+            columns_count=4,
+        )
 
 st.header("1. Upload item photos")
 
@@ -2985,14 +3012,14 @@ if "draft" in st.session_state:
                 )
 
             if draft_complete_ok:
-                st.success("Draft completed and moved to the Completed Drafts archive.")
+                st.success("Draft approved and moved to the Approved archive.")
 
                 # Update local dashboard cache immediately.
                 updated_dashboard = []
                 for cached_draft in st.session_state.get("draft_dashboard_list", []):
                     if str(cached_draft.get("Draft_ID", "")) == source_draft_id:
                         updated_draft = dict(cached_draft)
-                        updated_draft["Status"] = "Completed"
+                        updated_draft["Status"] = "Approved"
                         updated_draft["Completed_By"] = current_user
                         updated_draft["Completed_Date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
                         updated_dashboard.append(updated_draft)
