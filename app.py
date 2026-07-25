@@ -17,7 +17,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Version 3.7.0"
+APP_TITLE = "High Style AI – Version 3.7.1"
 
 # -----------------------------
 # State / Reset
@@ -2043,6 +2043,9 @@ def draft_workflow_status(draft):
     ):
         return "Approved", "🟢"
 
+    if raw_status in {"ready for review", "review", "awaiting review"}:
+        return "Ready for Review", "🔵"
+
     generated_markers = [
         draft.get("Generated_Title", ""),
         draft.get("AI_Title", ""),
@@ -2427,13 +2430,25 @@ else:
 
 dashboard_drafts = st.session_state.get("draft_dashboard_list", [])
 
+def normalized_saved_status(draft):
+    return str(draft.get("Status", "Draft") or "Draft").strip().lower()
+
+
 active_drafts = [
     draft for draft in dashboard_drafts
-    if str(draft.get("Status", "Draft")).strip().lower() == "draft"
+    if normalized_saved_status(draft) in {
+        "draft",
+        "ready for review",
+        "review",
+        "awaiting review",
+    }
 ]
 completed_drafts = [
     draft for draft in dashboard_drafts
-    if str(draft.get("Status", "")).strip().lower() == "completed"
+    if normalized_saved_status(draft) in {
+        "completed",
+        "approved",
+    }
 ]
 
 draft_stage_items = [
