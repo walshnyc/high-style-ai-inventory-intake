@@ -17,7 +17,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Version 3.6.6"
+APP_TITLE = "High Style AI – Version 3.7.0"
 
 # -----------------------------
 # State / Reset
@@ -336,6 +336,16 @@ def restore_generated_draft(draft):
         "revision_summary": draft.get("Generated_Revision_Summary", ""),
     }
     return restored if any(str(v or "").strip() for v in restored.values()) else {}
+
+
+def widget_key(name, form_key=None):
+    """Create a stable, explicit key for Streamlit widgets."""
+    suffix = str(
+        form_key
+        if form_key is not None
+        else st.session_state.get("form_version", 0)
+    )
+    return f"{name}_{suffix}"
 
 
 def invalidate_draft_dashboard():
@@ -2648,7 +2658,11 @@ st.caption(
 
 draft_col1, draft_col2 = st.columns([1, 2])
 with draft_col1:
-    if st.button("Save Draft", type="secondary"):
+    if st.button(
+        "Save Draft",
+        key=widget_key("intake_save_draft"),
+        type="secondary",
+    ):
         if not photos:
             st.warning("Upload at least one photo before saving a draft.")
         elif not web_app_url:
@@ -2725,6 +2739,7 @@ generate_col, new_entry_col = st.columns([2, 1])
 with generate_col:
     generate_draft_clicked = st.button(
         "Generate Draft",
+        key=widget_key("generate_draft"),
         type="primary",
         use_container_width=True,
     )
@@ -2732,6 +2747,7 @@ with generate_col:
 with new_entry_col:
     start_new_entry_clicked = st.button(
         "Clear and Start New Entry",
+        key=widget_key("top_clear_new_entry"),
         use_container_width=True,
         help="Clear the current form and begin a completely new inventory item.",
     )
@@ -3182,6 +3198,7 @@ if "draft" in st.session_state:
     with approve_col:
         approve_clicked = st.button(
             "Approve & Send to Google Sheet",
+            key=widget_key("review_approve", form_key),
             type="primary",
             use_container_width=True,
             disabled=(
@@ -3199,6 +3216,7 @@ if "draft" in st.session_state:
     with save_col:
         save_review_draft_clicked = st.button(
             "Save Draft",
+            key=widget_key("review_save_draft", form_key),
             use_container_width=True,
             disabled=not web_app_url,
             help="Save all current generated information and edits without approving the item.",
@@ -3207,6 +3225,7 @@ if "draft" in st.session_state:
     with clear_col:
         clear_new_entry_clicked = st.button(
             "Clear and Start New Entry",
+            key=widget_key("review_clear_new_entry", form_key),
             use_container_width=True,
             help="Clear the current form and begin a completely new inventory item.",
         )
