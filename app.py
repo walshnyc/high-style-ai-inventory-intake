@@ -17,7 +17,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Version 3.7.1"
+APP_TITLE = "High Style AI – Version 3.7.2"
 
 # -----------------------------
 # State / Reset
@@ -2269,62 +2269,58 @@ def display_draft_card(draft, allow_load=False, allow_delete=False, key_prefix="
         else:
             st.caption("No dimensions or notes were entered.")
 
-        button_cols = st.columns(2)
-
         if allow_load:
-            with button_cols[0]:
-                if st.button(
-                    "Continue Editing",
-                    type="primary",
-                    width="stretch",
-                    key=f"{key_prefix}_load_{draft_id}"
-                ):
-                    load_draft_into_editor(draft)
+            if st.button(
+                "Continue Editing",
+                type="primary",
+                width="stretch",
+                key=f"{key_prefix}_load_{draft_id}"
+            ):
+                load_draft_into_editor(draft)
 
         if allow_delete:
-            with button_cols[1]:
-                confirm_key = f"{key_prefix}_confirm_delete_{draft_id}"
-                if not st.session_state.get(confirm_key):
-                    if st.button(
-                        "Delete Draft",
-                        width="stretch",
-                        key=f"{key_prefix}_delete_{draft_id}"
-                    ):
-                        st.session_state[confirm_key] = True
+            confirm_key = f"{key_prefix}_confirm_delete_{draft_id}"
+
+            if not st.session_state.get(confirm_key):
+                if st.button(
+                    "Delete Draft",
+                    width="stretch",
+                    key=f"{key_prefix}_delete_{draft_id}"
+                ):
+                    st.session_state[confirm_key] = True
+                    st.rerun()
+            else:
+                st.error("Delete this draft permanently?")
+
+                if st.button(
+                    "Yes, delete",
+                    type="primary",
+                    width="stretch",
+                    key=f"{key_prefix}_yes_delete_{draft_id}"
+                ):
+                    ok, message = delete_draft_in_google_sheet(
+                        web_app_url,
+                        draft_id,
+                        current_user
+                    )
+                    if ok:
+                        st.session_state["draft_dashboard_list"] = [
+                            item for item in st.session_state.get("draft_dashboard_list", [])
+                            if str(item.get("Draft_ID", "")) != draft_id
+                        ]
+                        st.session_state.pop(confirm_key, None)
+                        st.success("Draft deleted.")
                         st.rerun()
-                else:
-                    st.error("Delete this draft permanently?")
-                    confirm_cols = st.columns(2)
-                    with confirm_cols[0]:
-                        if st.button(
-                            "Yes, delete",
-                            type="primary",
-                            width="stretch",
-                            key=f"{key_prefix}_yes_delete_{draft_id}"
-                        ):
-                            ok, message = delete_draft_in_google_sheet(
-                                web_app_url,
-                                draft_id,
-                                current_user
-                            )
-                            if ok:
-                                st.session_state["draft_dashboard_list"] = [
-                                    item for item in st.session_state.get("draft_dashboard_list", [])
-                                    if str(item.get("Draft_ID", "")) != draft_id
-                                ]
-                                st.session_state.pop(confirm_key, None)
-                                st.success("Draft deleted.")
-                                st.rerun()
-                            else:
-                                st.error(message)
-                    with confirm_cols[1]:
-                        if st.button(
-                            "Cancel",
-                            width="stretch",
-                            key=f"{key_prefix}_cancel_delete_{draft_id}"
-                        ):
-                            st.session_state.pop(confirm_key, None)
-                            st.rerun()
+                    else:
+                        st.error(message)
+
+                if st.button(
+                    "Cancel",
+                    width="stretch",
+                    key=f"{key_prefix}_cancel_delete_{draft_id}"
+                ):
+                    st.session_state.pop(confirm_key, None)
+                    st.rerun()
 
 # -----------------------------
 # App UI
@@ -2358,7 +2354,21 @@ st.markdown(
         padding-top: 0.75rem;
         padding-bottom: 0.75rem;
     }
-    </style>
+    
+    /* Keep action labels readable in narrow draft cards. */
+    div[data-testid="stButton"] > button,
+    div[data-testid="stButton"] > button p {
+        white-space: normal !important;
+        word-break: keep-all !important;
+        overflow-wrap: normal !important;
+    }
+
+    div[data-testid="stButton"] > button {
+        min-height: 2.75rem;
+        padding-left: 0.85rem;
+        padding-right: 0.85rem;
+    }
+</style>
     """,
     unsafe_allow_html=True,
 )
