@@ -17,7 +17,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Version 3.6.3"
+APP_TITLE = "High Style AI – Version 3.6.4"
 
 # -----------------------------
 # State / Reset
@@ -231,6 +231,117 @@ def save_draft_to_google_sheet(url, payload):
     payload["Action"] = "Draft_Save"
     return send_to_google_sheet(url, payload)
 
+
+def serialize_list_value(value):
+    if isinstance(value, list):
+        return json.dumps(value)
+    return str(value or "")
+
+
+def generated_draft_fields(draft):
+    """Map the complete AI-generated record into Draft_Inventory columns."""
+    draft = dict(draft or {})
+    return {
+        "Generated_Title": draft.get("title", ""),
+        "Generated_Description": draft.get("description", ""),
+        "Generated_Suggested_Price": draft.get("suggested_price_usd", ""),
+        "Generated_AI_Confidence": draft.get("ai_confidence_0_to_100", ""),
+        "Generated_Category": draft.get("category", ""),
+        "Generated_Subcategory": draft.get("subcategory", ""),
+        "Generated_Style": draft.get("style", ""),
+        "Generated_Period": draft.get("period", ""),
+        "Generated_Country": draft.get("country", ""),
+        "Generated_Designer_Maker": draft.get("designer_or_maker", ""),
+        "Generated_Materials_JSON": serialize_list_value(draft.get("materials", [])),
+        "Generated_Dimensions": draft.get("dimensions_formatted", ""),
+        "Generated_Condition_Notes": draft.get("condition_notes", ""),
+        "Generated_Price_Tag_Text": draft.get("price_tag_text", ""),
+        "Generated_SEO_Keywords_JSON": serialize_list_value(draft.get("seo_keywords", [])),
+        "Generated_Internal_Review_Notes": draft.get("internal_notes_for_review", ""),
+        "Generated_Revision_Summary": draft.get("revision_summary", ""),
+        "Original_AI_Draft_JSON": json.dumps(
+            st.session_state.get("original_ai_draft", draft),
+            default=str,
+        ),
+        "Current_AI_Draft_JSON": json.dumps(draft, default=str),
+        "Brain_Profile_JSON": json.dumps(
+            st.session_state.get("brain_profile", {}),
+            default=str,
+        ),
+        "Brain_Matches_JSON": json.dumps(
+            st.session_state.get("brain_matches", []),
+            default=str,
+        ),
+        "Learned_Rules_JSON": json.dumps(
+            st.session_state.get("learned_rules", []),
+            default=str,
+        ),
+        "Rule_Repair_History_JSON": json.dumps(
+            st.session_state.get("rule_repair_history", []),
+            default=str,
+        ),
+        "Retry_History_JSON": json.dumps(
+            st.session_state.get("retry_history", []),
+            default=str,
+        ),
+    }
+
+
+def restore_json_field(draft, field_name, default):
+    raw = draft.get(field_name, "")
+    if isinstance(raw, (dict, list)):
+        return raw
+    text = str(raw or "").strip()
+    if not text:
+        return default
+    try:
+        return json.loads(text)
+    except Exception:
+        return default
+
+
+def restore_generated_draft(draft):
+    """Rebuild the AI draft dictionary saved in Draft_Inventory."""
+    saved = restore_json_field(draft, "Current_AI_Draft_JSON", {})
+    if saved:
+        return saved
+
+    materials = restore_json_field(draft, "Generated_Materials_JSON", [])
+    if not materials:
+        raw_materials = str(draft.get("Generated_Materials_JSON", "") or "")
+        materials = [x.strip() for x in raw_materials.split(",") if x.strip()]
+
+    seo = restore_json_field(draft, "Generated_SEO_Keywords_JSON", [])
+    if not seo:
+        raw_seo = str(draft.get("Generated_SEO_Keywords_JSON", "") or "")
+        seo = [x.strip() for x in raw_seo.split(",") if x.strip()]
+
+    restored = {
+        "title": draft.get("Generated_Title", ""),
+        "description": draft.get("Generated_Description", ""),
+        "suggested_price_usd": draft.get("Generated_Suggested_Price", ""),
+        "ai_confidence_0_to_100": draft.get("Generated_AI_Confidence", ""),
+        "category": draft.get("Generated_Category", ""),
+        "subcategory": draft.get("Generated_Subcategory", ""),
+        "style": draft.get("Generated_Style", ""),
+        "period": draft.get("Generated_Period", ""),
+        "country": draft.get("Generated_Country", ""),
+        "designer_or_maker": draft.get("Generated_Designer_Maker", ""),
+        "materials": materials,
+        "dimensions_formatted": draft.get("Generated_Dimensions", ""),
+        "condition_notes": draft.get("Generated_Condition_Notes", ""),
+        "price_tag_text": draft.get("Generated_Price_Tag_Text", ""),
+        "seo_keywords": seo,
+        "internal_notes_for_review": draft.get("Generated_Internal_Review_Notes", ""),
+        "revision_summary": draft.get("Generated_Revision_Summary", ""),
+    }
+    return restored if any(str(v or "").strip() for v in restored.values()) else {}
+
+
+def invalidate_draft_dashboard():
+    st.session_state.pop("draft_dashboard_list", None)
+    st.session_state["draft_dashboard_dirty"] = True
+
 def list_drafts_from_google_sheet(url):
     url = normalize_google_script_url(url)
     payload = {"Action": "Draft_List"}
@@ -243,10 +354,11 @@ def list_drafts_from_google_sheet(url):
     except Exception as e:
         return False, str(e), []
 
+@st.cache_data(ttl=15, show_spinner=False)
 def list_all_drafts_from_google_sheet(url):
     """
-    Returns Active + Completed drafts.
-    Requires Apps Script support for Action = Draft_List_All.
+    Returns Active + Completed drafts automatically.
+    A short cache avoids unnecessary repeated requests during widget reruns.
     """
     url = normalize_google_script_url(url)
     payload = {"Action": "Draft_List_All"}
@@ -300,6 +412,7 @@ def complete_draft_in_google_sheet(url, draft_id, completed_by):
         try:
             data = response.json()
             if data.get("result") == "success":
+                list_all_drafts_from_google_sheet.clear()
                 return True, data.get("message", "Draft marked completed.")
             return False, str(data)
         except Exception:
@@ -342,6 +455,7 @@ def delete_draft_in_google_sheet(url, draft_id, deleted_by):
         try:
             data = response.json()
             if data.get("result") == "success":
+                list_all_drafts_from_google_sheet.clear()
                 return True, data.get("message", "Draft deleted.")
             return False, str(data)
         except Exception:
@@ -1962,6 +2076,9 @@ def draft_search_blob(draft):
         str(draft.get("Status", "")),
         str(draft.get("Completed_By", "")),
         str(draft.get("Target_Price", "")),
+        str(draft.get("Generated_Title", "")),
+        str(draft.get("Generated_Description", "")),
+        str(draft.get("Generated_Designer_Maker", "")),
     ]).lower()
 
 def draft_sort_key(draft):
@@ -1979,6 +2096,42 @@ def load_draft_into_editor(draft):
     st.session_state["loaded_draft"] = draft
     st.session_state["restored_draft_photos"] = restored_photos
     st.session_state["restored_photo_errors"] = restore_errors
+
+    restored_ai_draft = restore_generated_draft(draft)
+    if restored_ai_draft:
+        st.session_state["draft"] = restored_ai_draft
+        original_ai = restore_json_field(
+            draft,
+            "Original_AI_Draft_JSON",
+            restored_ai_draft,
+        )
+        st.session_state["original_ai_draft"] = original_ai
+        st.session_state["brain_profile"] = restore_json_field(
+            draft, "Brain_Profile_JSON", {}
+        )
+        st.session_state["brain_matches"] = restore_json_field(
+            draft, "Brain_Matches_JSON", []
+        )
+        st.session_state["learned_rules"] = restore_json_field(
+            draft, "Learned_Rules_JSON", []
+        )
+        st.session_state["rule_repair_history"] = restore_json_field(
+            draft, "Rule_Repair_History_JSON", []
+        )
+        st.session_state["retry_history"] = restore_json_field(
+            draft, "Retry_History_JSON", []
+        )
+        st.session_state["item_id"] = str(
+            draft.get("Generated_Item_ID", "")
+            or draft.get("Item_ID", "")
+            or st.session_state.get("item_id", "")
+            or generate_item_id()
+        )
+        st.session_state["dims_formatted"] = str(
+            restored_ai_draft.get("dimensions_formatted", "")
+            or draft.get("Dimensions", "")
+        )
+
     st.session_state["form_version"] = st.session_state.get("form_version", 0) + 1
     st.session_state["uploader_version"] = st.session_state.get("uploader_version", 0) + 1
     st.rerun()
@@ -2006,8 +2159,10 @@ def display_draft_thumbnail_gallery(drafts, allow_load=True, key_prefix="gallery
             updated_date = friendly_date(
                 draft.get("Last_Updated", "") or draft.get("Submitted_Date", "")
             )
+            generated_title = str(draft.get("Generated_Title", "") or "").strip()
             known_info = str(draft.get("Known_Info", "") or "").strip()
-            short_note = known_info[:48] + ("…" if len(known_info) > 48 else "")
+            card_text = generated_title or known_info
+            short_note = card_text[:48] + ("…" if len(card_text) > 48 else "")
 
             with columns[offset]:
                 with st.container(border=True):
@@ -2236,34 +2391,29 @@ with st.sidebar:
         st.warning(brain_message)
 
 
-dashboard_title_col, refresh_col = st.columns([6, 1])
-with dashboard_title_col:
-    st.subheader("Saved Work")
-with refresh_col:
-    refresh_dashboard_clicked = st.button(
-        "↻ Refresh",
-        use_container_width=True,
-        help="Refresh saved drafts from Google Sheets.",
+st.subheader("Saved Work")
+
+if web_app_url:
+    if st.session_state.pop("draft_dashboard_dirty", False):
+        list_all_drafts_from_google_sheet.clear()
+
+    dashboard_ok, dashboard_msg, automatic_drafts = list_all_drafts_from_google_sheet(
+        web_app_url
     )
 
-if refresh_dashboard_clicked:
-        if not web_app_url:
-            st.warning("Google Sheet URL is missing from secrets.")
+    if dashboard_ok:
+        st.session_state["draft_dashboard_list"] = automatic_drafts
+    elif "draft_dashboard_list" not in st.session_state:
+        active_ok, active_msg, active_drafts = list_drafts_from_google_sheet(
+            web_app_url
+        )
+        if active_ok:
+            st.session_state["draft_dashboard_list"] = active_drafts
         else:
-            ok, msg, drafts = list_all_drafts_from_google_sheet(web_app_url)
-            if ok:
-                st.session_state["draft_dashboard_list"] = drafts
-                st.success(msg)
-            else:
-                # Fallback: active drafts still work even before Draft_List_All is added.
-                active_ok, active_msg, active_drafts = list_drafts_from_google_sheet(web_app_url)
-                if active_ok:
-                    st.session_state["draft_dashboard_list"] = active_drafts
-                    st.warning(
-                        "Active drafts loaded. Completed archive requires the Draft_List_All Apps Script update."
-                    )
-                else:
-                    st.warning(f"Could not load drafts: {msg}")
+            st.session_state["draft_dashboard_list"] = []
+            st.caption("Saved work is temporarily unavailable.")
+else:
+    st.session_state.setdefault("draft_dashboard_list", [])
 
 dashboard_drafts = st.session_state.get("draft_dashboard_list", [])
 
@@ -2540,12 +2690,22 @@ with draft_col1:
                 "Target_Price": target_price,
                 "Shoot_List_Month": shoot_month,
                 "Last_Updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                "User_Role": current_role
+                "User_Role": current_role,
+                "Generated_Item_ID": st.session_state.get("item_id", ""),
             }
+
+            if st.session_state.get("draft"):
+                draft_payload.update(
+                    generated_draft_fields(st.session_state.get("draft", {}))
+                )
+                draft_payload["Status"] = "Ready for Review"
             with st.spinner("Saving draft to Google Sheet..."):
                 ok, msg = save_draft_to_google_sheet(web_app_url, draft_payload)
             if ok:
+                st.session_state["loaded_draft"] = dict(draft_payload)
+                invalidate_draft_dashboard()
                 st.success(f"Draft saved: {draft_id}")
+                st.rerun()
             else:
                 st.error(msg)
 
@@ -2650,6 +2810,75 @@ if generate_draft_clicked:
     st.session_state["submitted_by"] = current_user
     st.session_state["submitted_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
     st.session_state["retry_history"] = []
+
+    # A generated listing is now a complete saved draft, even when the user
+    # did not press Save Draft first.
+    if web_app_url and c_ok:
+        draft_id = str(loaded_draft.get("Draft_ID", "") or generate_draft_id())
+        existing_urls = parse_draft_photo_urls(loaded_draft) if loaded_draft else []
+        session_urls = st.session_state.get("draft_photo_urls", [])
+        existing_urls = existing_urls or session_urls
+
+        photos_to_upload = list(new_uploaded_photos or [])
+        if photos_to_upload and not existing_urls:
+            with st.spinner("Saving generated draft photos..."):
+                uploaded_urls, upload_errors = upload_draft_photos_to_cloudinary(
+                    photos_to_upload,
+                    draft_id + "-generated",
+                )
+            existing_urls = uploaded_urls
+            if upload_errors:
+                st.warning(
+                    "The listing was generated, but some photos could not be saved: "
+                    + "; ".join(upload_errors)
+                )
+
+        st.session_state["draft_photo_urls"] = existing_urls
+        generated_payload = {
+            "Draft_ID": draft_id,
+            "Status": "Ready for Review",
+            "Submitted_By": (
+                loaded_draft.get("Submitted_By", "")
+                or current_user
+            ),
+            "Submitted_Date": (
+                loaded_draft.get("Submitted_Date", "")
+                or datetime.now().strftime("%Y-%m-%d %H:%M")
+            ),
+            "Photo_URLs_JSON": json.dumps(existing_urls),
+            "Primary_Image_URL": existing_urls[0] if existing_urls else "",
+            "Height_in": height,
+            "Width_in": width,
+            "Depth_in": depth,
+            "Diameter_in": diameter,
+            "Body_Height_in": body_height,
+            "Seat_Height_in": seat_height,
+            "Dimensions": dims,
+            "Known_Info": known_info,
+            "Internal_Notes": notes,
+            "Target_Price": target_price,
+            "Shoot_List_Month": shoot_month,
+            "Last_Updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "User_Role": current_role,
+            "Generated_Item_ID": st.session_state.get("item_id", ""),
+        }
+        generated_payload.update(generated_draft_fields(result["draft"]))
+
+        with st.spinner("Saving the complete generated draft..."):
+            autosave_ok, autosave_msg = save_draft_to_google_sheet(
+                web_app_url,
+                generated_payload,
+            )
+
+        if autosave_ok:
+            st.session_state["loaded_draft"] = dict(generated_payload)
+            invalidate_draft_dashboard()
+            st.toast("Generated draft saved automatically.")
+        else:
+            st.warning(
+                "The listing was generated, but its complete draft record "
+                f"could not be saved: {autosave_msg}"
+            )
 
 if st.session_state.get("brain_matches"):
     with st.expander(f"High Style Brain matches used ({len(st.session_state.get('brain_matches', []))})"):
