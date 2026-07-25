@@ -17,7 +17,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Version 3.6.4"
+APP_TITLE = "High Style AI – Version 3.6.6"
 
 # -----------------------------
 # State / Reset
@@ -2634,13 +2634,15 @@ shoot_month = st.selectbox(
     index=shoot_default_index,
     key=f"shoot_month_select_{form_key}",
     help=(
-        "The app defaults to next month. On approval, the item is saved to "
-        "Master_Inventory and also added to this monthly shoot-list tab."
+        "The app defaults to next month. Saving a draft immediately creates "
+        "or updates the same item in Master_Inventory and this monthly Shoot List. "
+        "Approval later updates those same rows."
     ),
 )
 st.caption(
-    f"Approval destination: Master_Inventory + "
-    f"{shoot_list_tab_name(shoot_month)}"
+    f"Lifecycle destination: Master_Inventory + "
+    f"{shoot_list_tab_name(shoot_month)}. Drafts, review items, and approved "
+    "items remain visible for shoot planning."
 )
 
 
@@ -2655,6 +2657,12 @@ with draft_col1:
             st.warning("Cloudinary is not configured.")
         else:
             draft_id = loaded_draft.get("Draft_ID") or generate_draft_id()
+            lifecycle_item_id = str(
+                loaded_draft.get("Generated_Item_ID", "")
+                or st.session_state.get("item_id", "")
+                or generate_item_id()
+            )
+            st.session_state["item_id"] = lifecycle_item_id
             existing_draft_urls = parse_draft_photo_urls(loaded_draft) if loaded_draft else []
             photos_to_upload = list(new_uploaded_photos or [])
 
@@ -2691,7 +2699,7 @@ with draft_col1:
                 "Shoot_List_Month": shoot_month,
                 "Last_Updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
                 "User_Role": current_role,
-                "Generated_Item_ID": st.session_state.get("item_id", ""),
+                "Generated_Item_ID": lifecycle_item_id,
             }
 
             if st.session_state.get("draft"):
@@ -2699,18 +2707,18 @@ with draft_col1:
                     generated_draft_fields(st.session_state.get("draft", {}))
                 )
                 draft_payload["Status"] = "Ready for Review"
-            with st.spinner("Saving draft to Google Sheet..."):
+            with st.spinner("Saving draft and updating inventory lifecycle..."):
                 ok, msg = save_draft_to_google_sheet(web_app_url, draft_payload)
             if ok:
                 st.session_state["loaded_draft"] = dict(draft_payload)
                 invalidate_draft_dashboard()
-                st.success(f"Draft saved: {draft_id}")
+                st.success(f"Draft saved and added to Master Inventory and the Shoot List: {draft_id}")
                 st.rerun()
             else:
                 st.error(msg)
 
 with draft_col2:
-    st.caption("Use Save Draft when you only have photos or partial notes. Come back later, add missing details, then generate and approve.")
+    st.caption("A partial save is immediately listed in Master Inventory and the designated Shoot List. Return later to generate, edit, and approve the same item.")
 
 generate_col, new_entry_col = st.columns([2, 1])
 
@@ -2723,7 +2731,7 @@ with generate_col:
 
 with new_entry_col:
     start_new_entry_clicked = st.button(
-        "New Entry",
+        "Clear and Start New Entry",
         use_container_width=True,
         help="Clear the current form and begin a completely new inventory item.",
     )
@@ -2864,7 +2872,7 @@ if generate_draft_clicked:
         }
         generated_payload.update(generated_draft_fields(result["draft"]))
 
-        with st.spinner("Saving the complete generated draft..."):
+        with st.spinner("Saving the generated draft and updating inventory lifecycle..."):
             autosave_ok, autosave_msg = save_draft_to_google_sheet(
                 web_app_url,
                 generated_payload,
@@ -2873,7 +2881,7 @@ if generate_draft_clicked:
         if autosave_ok:
             st.session_state["loaded_draft"] = dict(generated_payload)
             invalidate_draft_dashboard()
-            st.toast("Generated draft saved automatically.")
+            st.toast("Generated draft saved and synced to Master Inventory and the Shoot List.")
         else:
             st.warning(
                 "The listing was generated, but its complete draft record "
@@ -2931,7 +2939,12 @@ if "draft" in st.session_state:
     dims_default = str(draft.get("dimensions_formatted", "") or "").strip() or saved_dims or dims
     dims_final = st.text_input("Dimensions", value=dims_default, key=f"dims_final_review_{form_key}")
     condition_notes = st.text_area("Condition Notes", value=str(draft.get("condition_notes", "")), height=90, key=f"condition_notes_review_{form_key}")
-    st.text_area("Price Tag Text", value=str(draft.get("price_tag_text", "")), height=140, key=f"price_tag_review_{form_key}")
+    price_tag_text = st.text_area(
+        "Price Tag Text",
+        value=str(draft.get("price_tag_text", "")),
+        height=140,
+        key=f"price_tag_review_{form_key}",
+    )
     seo_text = st.text_input("SEO Keywords", value=seo_text_default, key=f"seo_review_{form_key}")
     review_notes = st.text_area("Internal Notes for Review", value=str(draft.get("internal_notes_for_review", "")), height=100, key=f"internal_review_notes_{form_key}")
     if draft.get("revision_summary"):
@@ -3153,34 +3166,168 @@ if "draft" in st.session_state:
         "Dimensions": dims_final,
         "Price": normalize_price(approved_price),
         "Description": description,
-        "Status": "Awaiting Photography",
+        "Status": "Approved",
         "Shoot List": shoot_month,
     }]
     st.dataframe(preview, width="stretch", hide_index=True)
 
-    st.header("6. Approve to Master Inventory and Monthly Shoot List")
-    st.caption(f"Approver: {current_user}")
+    st.header("6. Save or Approve")
+    st.caption(
+        "Save the latest work as a draft, approve it to Master Inventory, "
+        "or clear the form and begin another item."
+    )
 
-    if st.session_state.get("last_saved"):
-        st.success("Saved successfully.")
-        if st.button("Submit Another Entry", type="primary"):
-            clear_entry_state()
+    approve_col, save_col, clear_col = st.columns(3)
+
+    with approve_col:
+        approve_clicked = st.button(
+            "Approve & Send to Google Sheet",
+            type="primary",
+            use_container_width=True,
+            disabled=(
+                not live_house_validation["mandatory_ok"]
+                or not web_app_url
+                or not c_ok
+            ),
+            help=(
+                "Resolve the failed House Rules Check before approval."
+                if not live_house_validation["mandatory_ok"]
+                else "Approve and update the existing Master Inventory and monthly Shoot List rows."
+            ),
+        )
+
+    with save_col:
+        save_review_draft_clicked = st.button(
+            "Save Draft",
+            use_container_width=True,
+            disabled=not web_app_url,
+            help="Save all current generated information and edits without approving the item.",
+        )
+
+    with clear_col:
+        clear_new_entry_clicked = st.button(
+            "Clear and Start New Entry",
+            use_container_width=True,
+            help="Clear the current form and begin a completely new inventory item.",
+        )
+
+    if clear_new_entry_clicked:
+        clear_entry_state()
+        st.rerun()
+
+    if not web_app_url:
+        st.warning(
+            "Google Sheet URL is missing from Streamlit secrets. "
+            "Add GOOGLE_APPS_SCRIPT_URL in Streamlit app secrets."
+        )
+
+    if save_review_draft_clicked:
+        current_saved_draft = {
+            "title": title,
+            "description": description,
+            "suggested_price_usd": suggested_price,
+            "approved_price_usd": approved_price,
+            "ai_confidence_0_to_100": confidence,
+            "category": category,
+            "subcategory": subcategory,
+            "style": style,
+            "period": period,
+            "country": country,
+            "designer_or_maker": maker,
+            "materials": [
+                value.strip()
+                for value in str(materials_text or "").split(",")
+                if value.strip()
+            ],
+            "dimensions_formatted": dims_final,
+            "condition_notes": condition_notes,
+            "price_tag_text": price_tag_text,
+            "seo_keywords": [
+                value.strip()
+                for value in str(seo_text or "").split(",")
+                if value.strip()
+            ],
+            "internal_notes_for_review": review_notes,
+            "revision_summary": draft.get("revision_summary", ""),
+        }
+
+        draft_id = str(
+            loaded_draft.get("Draft_ID", "")
+            or generate_draft_id()
+        )
+        lifecycle_item_id = str(
+            loaded_draft.get("Generated_Item_ID", "")
+            or item_id
+            or st.session_state.get("item_id", "")
+            or generate_item_id()
+        )
+        st.session_state["item_id"] = lifecycle_item_id
+
+        saved_photo_urls = (
+            parse_draft_photo_urls(loaded_draft)
+            or st.session_state.get("draft_photo_urls", [])
+        )
+
+        save_now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        reviewed_draft_payload = {
+            "Draft_ID": draft_id,
+            "Status": "Ready for Review",
+            "Submitted_By": (
+                loaded_draft.get("Submitted_By", "")
+                or st.session_state.get("submitted_by", current_user)
+                or current_user
+            ),
+            "Submitted_Date": (
+                loaded_draft.get("Submitted_Date", "")
+                or st.session_state.get("submitted_date", save_now)
+                or save_now
+            ),
+            "Photo_URLs_JSON": json.dumps(saved_photo_urls),
+            "Primary_Image_URL": (
+                saved_photo_urls[0] if saved_photo_urls else ""
+            ),
+            "Height_in": inputs.get("height", ""),
+            "Width_in": inputs.get("width", ""),
+            "Depth_in": inputs.get("depth", ""),
+            "Diameter_in": inputs.get("diameter", ""),
+            "Body_Height_in": inputs.get("body_height", ""),
+            "Seat_Height_in": inputs.get("seat_height", ""),
+            "Dimensions": dims_final,
+            "Known_Info": st.session_state.get("input_known_info", ""),
+            "Internal_Notes": st.session_state.get("input_notes", ""),
+            "Target_Price": st.session_state.get("input_target_price", ""),
+            "Shoot_List_Month": shoot_month,
+            "Last_Updated": save_now,
+            "User_Role": current_role,
+            "Generated_Item_ID": lifecycle_item_id,
+        }
+        reviewed_draft_payload.update(
+            generated_draft_fields(current_saved_draft)
+        )
+
+        with st.spinner("Saving the latest draft and updating existing inventory rows..."):
+            draft_save_ok, draft_save_msg = save_draft_to_google_sheet(
+                web_app_url,
+                reviewed_draft_payload,
+            )
+
+        if draft_save_ok:
+            st.session_state["draft"] = current_saved_draft
+            st.session_state["loaded_draft"] = dict(
+                reviewed_draft_payload
+            )
+            st.session_state["item_id"] = lifecycle_item_id
+            st.session_state["dims_formatted"] = dims_final
+            invalidate_draft_dashboard()
+            st.success(
+                "Draft saved. The same Master Inventory and Shoot List rows "
+                "were updated and remain marked Ready for Review."
+            )
             st.rerun()
+        else:
+            st.error(draft_save_msg)
 
-    elif not web_app_url:
-        st.warning("Google Sheet URL is missing from Streamlit secrets. Add GOOGLE_APPS_SCRIPT_URL in Streamlit app secrets.")
-    elif not c_ok:
-        st.warning("Cloudinary is not configured.")
-    elif st.button(
-        "Approve & Save to Google Sheet",
-        type="primary",
-        disabled=not live_house_validation["mandatory_ok"],
-        help=(
-            None
-            if live_house_validation["mandatory_ok"]
-            else "Resolve the failed House Rules Check before approval."
-        ),
-    ):
+    if approve_clicked:
         with st.spinner("Uploading primary image to Cloudinary..."):
             primary_url, upload_error = upload_to_cloudinary(st.session_state["photos_for_save"][0], item_id)
         if upload_error:
@@ -3277,7 +3424,7 @@ if "draft" in st.session_state:
             "Overall_Edit_Score": audit_metrics["Overall_Edit_Score"]
         }
 
-        with st.spinner("Saving to Master Inventory and monthly shoot list..."):
+        with st.spinner("Approving and updating the existing Master Inventory and Shoot List rows..."):
             ok, msg = send_to_google_sheet(web_app_url, payload)
         if not ok:
             st.error(msg)
