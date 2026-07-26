@@ -17,7 +17,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Version 3.9.1 RC2"
+APP_TITLE = "High Style AI – Version 3.9.2 RC3"
 
 # -----------------------------
 # State / Reset
@@ -1560,6 +1560,31 @@ def parse_json(text):
 
 def generate_item_id():
     return "HSAI-" + datetime.now().strftime("%Y%m%d") + "-" + str(uuid.uuid4())[:6].upper()
+
+def canonical_item_id(record=None, proposed=""):
+    """
+    Return the single immutable Item_ID used throughout an item's lifecycle.
+
+    Draft, Review, and Approved saves must all use this same value so the
+    Google Sheets backend updates one row instead of creating a second row.
+    """
+    record = dict(record or {})
+    candidates = [
+        st.session_state.get("approved_item_id", ""),
+        record.get("Generated_Item_ID", ""),
+        record.get("Item_ID", ""),
+        st.session_state.get("item_id", ""),
+        proposed,
+    ]
+    for candidate in candidates:
+        value = str(candidate or "").strip()
+        if value:
+            st.session_state["item_id"] = value
+            return value
+
+    value = generate_item_id()
+    st.session_state["item_id"] = value
+    return value
 
 def is_blank_value(value):
     if value is None:
@@ -3175,7 +3200,9 @@ if generate_draft_clicked:
         "repair_history",
         [],
     )
-    st.session_state["item_id"] = generate_item_id()
+    # Preserve the existing lifecycle Item_ID when generating or regenerating
+    # a saved draft. Generating must never create a second Item_ID.
+    st.session_state["item_id"] = canonical_item_id(loaded_draft)
     st.session_state["photo_names"] = [p.name for p in photos]
     st.session_state["dims_inputs"] = {
         "height": height, "width": width, "depth": depth,
@@ -3241,7 +3268,7 @@ if generate_draft_clicked:
             "Shoot_List_Month": friendly_shoot_month(shoot_month),
             "Last_Updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
             "User_Role": current_role,
-            "Generated_Item_ID": st.session_state.get("item_id", ""),
+            "Generated_Item_ID": canonical_item_id(loaded_draft),
         }
         generated_payload.update(generated_draft_fields(result["draft"]))
 
@@ -3287,7 +3314,13 @@ if "draft" in st.session_state:
     st.divider()
     st.header("4. Review / Edit Draft")
 
-    item_id = st.text_input("Item ID", value=st.session_state["item_id"], key=f"item_id_review_{form_key}")
+    item_id = st.text_input(
+        "Item ID",
+        value=canonical_item_id(loaded_draft),
+        key=f"item_id_review_{form_key}",
+        disabled=True,
+        help="This ID stays fixed from Draft through Review and Approved so Google Sheets updates one row.",
+    )
     title = st.text_input("Title", value=str(draft.get("title", "")), max_chars=80, key=f"title_review_{form_key}")
     st.caption(f"Title length: {len(title)} / 80")
     description = st.text_area("Description", value=str(draft.get("description", "")), height=260, key=f"description_review_{form_key}")
@@ -3679,13 +3712,10 @@ if "draft" in st.session_state:
             loaded_draft.get("Draft_ID", "")
             or generate_draft_id()
         )
-        lifecycle_item_id = str(
-            loaded_draft.get("Generated_Item_ID", "")
-            or item_id
-            or st.session_state.get("item_id", "")
-            or generate_item_id()
+        lifecycle_item_id = canonical_item_id(
+            loaded_draft,
+            proposed=item_id,
         )
-        st.session_state["item_id"] = lifecycle_item_id
 
         saved_photo_urls = (
             parse_draft_photo_urls(loaded_draft)
@@ -3810,9 +3840,9 @@ if "draft" in st.session_state:
 
         payload = {
             "Action": "Inventory_Save",
-            "Item_ID": (
-                st.session_state.get("approved_item_id", "")
-                or item_id
+            "Item_ID": canonical_item_id(
+                loaded_draft,
+                proposed=item_id,
             ),
             "Status": "Approved",
             "Shoot_List_Month": friendly_shoot_month(shoot_month),
@@ -3857,9 +3887,9 @@ if "draft" in st.session_state:
 
         learning_payload = {
             "Timestamp": now,
-            "Item_ID": (
-                st.session_state.get("approved_item_id", "")
-                or item_id
+            "Item_ID": canonical_item_id(
+                loaded_draft,
+                proposed=item_id,
             ),
             "Shoot_List_Month": friendly_shoot_month(shoot_month),
             "Shoot_List_Tab": shoot_list_tab_name(shoot_month),
@@ -3913,10 +3943,9 @@ if "draft" in st.session_state:
         with st.spinner("Sending learning log..."):
             log_ok, log_msg = send_learning_log(web_app_url, learning_payload)
 
-        st.session_state["item_id"] = (
-            st.session_state.get("approved_item_id", "")
-            or payload.get("Item_ID", "")
-            or item_id
+        st.session_state["item_id"] = canonical_item_id(
+            loaded_draft,
+            proposed=payload.get("Item_ID", "") or item_id,
         )
 
         st.success(msg)
