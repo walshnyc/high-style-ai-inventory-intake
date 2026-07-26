@@ -17,7 +17,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Version 3.7.6"
+APP_TITLE = "High Style AI – Version 3.7.7"
 
 # -----------------------------
 # State / Reset
@@ -3739,7 +3739,10 @@ if "draft" in st.session_state:
 
         learning_payload = {
             "Timestamp": now,
-            "Item_ID": item_id,
+            "Item_ID": (
+                st.session_state.get("approved_item_id", "")
+                or item_id
+            ),
             "Shoot_List_Month": friendly_shoot_month(shoot_month),
             "Shoot_List_Tab": shoot_list_tab_name(shoot_month),
             "Original_AI_Title": original.get("title", ""), "Final_Approved_Title": title,
@@ -3791,6 +3794,12 @@ if "draft" in st.session_state:
 
         with st.spinner("Sending learning log..."):
             log_ok, log_msg = send_learning_log(web_app_url, learning_payload)
+
+        st.session_state["item_id"] = (
+            st.session_state.get("approved_item_id", "")
+            or payload.get("Item_ID", "")
+            or item_id
+        )
 
         st.success(msg)
         if log_ok:
