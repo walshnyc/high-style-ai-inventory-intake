@@ -17,7 +17,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Version 3.9.0 RC1"
+APP_TITLE = "High Style AI – Version 3.9.1 RC2"
 
 # -----------------------------
 # State / Reset
@@ -30,10 +30,6 @@ def init_state():
         st.session_state["form_version"] = 0
     if "retry_history" not in st.session_state:
         st.session_state["retry_history"] = []
-    if "photos_for_save" not in st.session_state:
-        st.session_state["photos_for_save"] = []
-    if "draft_photo_urls" not in st.session_state:
-        st.session_state["draft_photo_urls"] = []
 
 def clear_entry_state():
     st.session_state["dims_inputs"] = {
@@ -297,6 +293,81 @@ def generated_draft_fields(draft):
             default=str,
         ),
     }
+
+
+def capture_review_edits_from_session(draft, form_key):
+    """Merge all currently visible Review/Edit widget values into a draft."""
+    current = dict(draft or {})
+
+    def value(name, fallback=""):
+        return st.session_state.get(f"{name}_{form_key}", fallback)
+
+    current.update({
+        "title": value("title_review", current.get("title", "")),
+        "description": value("description_review", current.get("description", "")),
+        "suggested_price_usd": value(
+            "suggested_price_review",
+            current.get("suggested_price_usd", ""),
+        ),
+        "approved_price_usd": value(
+            "approved_price_review",
+            current.get("approved_price_usd", current.get("suggested_price_usd", "")),
+        ),
+        "ai_confidence_0_to_100": value(
+            "confidence_review",
+            current.get("ai_confidence_0_to_100", ""),
+        ),
+        "category": value("category_review", current.get("category", "")),
+        "subcategory": value("subcategory_review", current.get("subcategory", "")),
+        "style": value("style_review", current.get("style", "")),
+        "period": value("period_review", current.get("period", "")),
+        "country": value("country_review", current.get("country", "")),
+        "designer_or_maker": value(
+            "maker_review",
+            current.get("designer_or_maker", ""),
+        ),
+        "materials": [
+            item.strip()
+            for item in str(
+                value(
+                    "materials_review",
+                    ", ".join(current.get("materials", []))
+                    if isinstance(current.get("materials", []), list)
+                    else current.get("materials", ""),
+                )
+            ).split(",")
+            if item.strip()
+        ],
+        "dimensions_formatted": value(
+            "dims_final_review",
+            current.get("dimensions_formatted", ""),
+        ),
+        "condition_notes": value(
+            "condition_notes_review",
+            current.get("condition_notes", ""),
+        ),
+        "price_tag_text": value(
+            "price_tag_review",
+            current.get("price_tag_text", ""),
+        ),
+        "seo_keywords": [
+            item.strip()
+            for item in str(
+                value(
+                    "seo_review",
+                    ", ".join(current.get("seo_keywords", []))
+                    if isinstance(current.get("seo_keywords", []), list)
+                    else current.get("seo_keywords", ""),
+                )
+            ).split(",")
+            if item.strip()
+        ],
+        "internal_notes_for_review": value(
+            "internal_review_notes",
+            current.get("internal_notes_for_review", ""),
+        ),
+    })
+    return current
 
 
 def restore_json_field(draft, field_name, default):
@@ -2311,12 +2382,7 @@ def load_draft_into_editor(draft):
     st.session_state["loaded_draft"] = draft
     st.session_state["restored_draft_photos"] = restored_photos
     st.session_state["restored_photo_errors"] = restore_errors
-    # Reopened Review/Approved records already have Cloudinary-backed photos.
-    # Restore them into the same state keys used by the approval workflow so
-    # approval never depends on a temporary uploader object from an old run.
     st.session_state["photos_for_save"] = list(restored_photos)
-    st.session_state["photo_names"] = [photo.name for photo in restored_photos]
-    st.session_state["draft_photo_urls"] = parse_draft_photo_urls(draft)
     st.session_state["input_known_info"] = str(
         draft.get("Known_Info", "")
         or draft.get("Title", "")
@@ -2983,8 +3049,15 @@ with draft_col1:
             }
 
             if st.session_state.get("draft"):
+                # Preserve every edit currently entered in the Review section,
+                # even when the user clicks the earlier Save Draft button.
+                latest_review_draft = capture_review_edits_from_session(
+                    st.session_state.get("draft", {}),
+                    form_key,
+                )
+                st.session_state["draft"] = latest_review_draft
                 draft_payload.update(
-                    generated_draft_fields(st.session_state.get("draft", {}))
+                    generated_draft_fields(latest_review_draft)
                 )
                 draft_payload["Status"] = "Ready for Review"
             with st.spinner("Saving draft and updating inventory lifecycle..."):
@@ -3222,7 +3295,14 @@ if "draft" in st.session_state:
 
     c1, c2, c3 = st.columns(3)
     with c1: suggested_price = st.text_input("Suggested Price USD", value=str(draft.get("suggested_price_usd", "")), key=f"suggested_price_review_{form_key}")
-    with c2: approved_price = st.text_input("Approved Price USD", value=str(draft.get("suggested_price_usd", "")), key=f"approved_price_review_{form_key}")
+    with c2: approved_price = st.text_input(
+        "Approved Price USD",
+        value=str(
+            draft.get("approved_price_usd", "")
+            or draft.get("suggested_price_usd", "")
+        ),
+        key=f"approved_price_review_{form_key}",
+    )
     with c3: confidence = st.text_input("AI Confidence", value=str(draft.get("ai_confidence_0_to_100", "")), key=f"confidence_review_{form_key}")
 
     c4, c5, c6 = st.columns(3)
@@ -3683,35 +3763,28 @@ if "draft" in st.session_state:
             st.error(draft_save_msg)
 
     if approve_clicked:
-        # New uploads are temporary Streamlit objects, while reopened Review
-        # items normally have only persistent Cloudinary URLs. Reuse the saved
-        # URL whenever possible and upload only when a local photo is present.
-        photos_for_save = list(st.session_state.get("photos_for_save", []) or [])
-        saved_photo_urls = (
+        approval_photos = list(
+            st.session_state.get("photos_for_save", [])
+            or st.session_state.get("restored_draft_photos", [])
+            or photos
+            or []
+        )
+        existing_photo_urls = (
             parse_draft_photo_urls(loaded_draft)
-            or list(st.session_state.get("draft_photo_urls", []) or [])
+            or st.session_state.get("draft_photo_urls", [])
         )
 
-        primary_url = str(
-            loaded_draft.get("Primary_Image_URL", "")
-            or (saved_photo_urls[0] if saved_photo_urls else "")
-            or ""
-        ).strip()
+        primary_url = existing_photo_urls[0] if existing_photo_urls else ""
         upload_error = ""
 
-        if photos_for_save:
-            first_photo = photos_for_save[0]
-            existing_source_url = str(
-                getattr(first_photo, "source_url", "") or ""
-            ).strip()
-            if existing_source_url:
-                primary_url = existing_source_url
-            elif not primary_url:
-                with st.spinner("Uploading primary image to Cloudinary..."):
-                    primary_url, upload_error = upload_to_cloudinary(
-                        first_photo,
-                        item_id,
-                    )
+        # Upload only when there is a genuinely new local image. Restored
+        # Cloudinary images already carry source_url and are safely reused.
+        if approval_photos:
+            with st.spinner("Preparing primary image..."):
+                primary_url, upload_error = upload_to_cloudinary(
+                    approval_photos[0],
+                    item_id,
+                )
 
         if upload_error:
             st.error(f"Cloudinary upload failed: {upload_error}")
@@ -3719,8 +3792,8 @@ if "draft" in st.session_state:
 
         if not primary_url:
             st.error(
-                "No primary image is available for this item. "
-                "Please restore or upload at least one photo before approval."
+                "No primary image is available. Reopen the saved item or "
+                "upload a photo before approving."
             )
             st.stop()
 
@@ -3745,7 +3818,7 @@ if "draft" in st.session_state:
             "Shoot_List_Month": friendly_shoot_month(shoot_month),
             "Shoot_List_Tab": shoot_list_tab_name(shoot_month),
             "Primary_Image": image_formula,
-            "Primary_Image_URL": primary_url, "Additional_Images": ", ".join(saved_photo_urls[1:] or st.session_state.get("photo_names", [])[1:]),
+            "Primary_Image_URL": primary_url, "Additional_Images": ", ".join(st.session_state.get("photo_names", [])[1:]),
             "AI_Confidence": confidence, "Title": title, "Description": description, "Dimensions": dims_final,
             "Height_in": inputs.get("height", ""), "Width_in": inputs.get("width", ""), "Depth_in": inputs.get("depth", ""),
             "Diameter_in": inputs.get("diameter", ""), "Body_Height_in": inputs.get("body_height", ""), "Seat_Height_in": inputs.get("seat_height", ""),
@@ -3888,19 +3961,4 @@ if "draft" in st.session_state:
                 )
 
         st.session_state["last_saved"] = True
-
-        # Approval is complete. Close the editor and return the item to the
-        # dashboard, where the refreshed status places it in Approved.
-        st.session_state.pop("draft", None)
-        st.session_state.pop("original_ai_draft", None)
-        st.session_state.pop("loaded_draft", None)
-        st.session_state.pop("restored_draft_photos", None)
-        st.session_state.pop("restored_photo_errors", None)
-        st.session_state.pop("photos_for_save", None)
-        st.session_state.pop("photo_names", None)
-        st.session_state.pop("draft_photo_urls", None)
-        st.session_state["editing_approved_item"] = False
-        st.session_state.pop("approved_item_id", None)
-        st.session_state.pop("approved_source_draft_id", None)
-        invalidate_draft_dashboard()
         st.rerun()
