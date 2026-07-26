@@ -17,7 +17,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Version 3.7.2"
+APP_TITLE = "High Style AI – Version 3.7.3"
 
 # -----------------------------
 # State / Reset
@@ -1874,12 +1874,41 @@ def add_months(year, month, offset):
     return absolute_month // 12, absolute_month % 12 + 1
 
 
+def friendly_shoot_month(month_value):
+    """Convert saved shoot month values into a friendly Month YYYY label."""
+    raw = str(month_value or "").strip()
+    if not raw:
+        return ""
+
+    for fmt in ("%B %Y", "%b %Y"):
+        try:
+            return datetime.strptime(raw, fmt).strftime("%B %Y")
+        except ValueError:
+            pass
+
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).strftime("%B %Y")
+    except ValueError:
+        pass
+
+    for fmt, candidate in (
+        ("%Y-%m", raw[:7]),
+        ("%Y-%m-%d", raw[:10]),
+    ):
+        try:
+            return datetime.strptime(candidate, fmt).strftime("%B %Y")
+        except ValueError:
+            pass
+
+    return raw
+
+
 def shoot_month_label(year, month):
     return datetime(year, month, 1).strftime("%B %Y")
 
 
 def shoot_list_tab_name(month_label):
-    return f"Shoot List - {month_label}"
+    return f"Shoot List - {friendly_shoot_month(month_label)}"
 
 
 def shoot_month_choices():
@@ -2655,7 +2684,9 @@ notes = st.text_area("Internal notes", value=str(loaded_draft.get("Internal_Note
 target_price = st.text_input("Optional target/list price", value=str(loaded_draft.get("Target_Price", "")), key=f"target_price_input_{form_key}")
 
 shoot_choices, shoot_default_index = shoot_month_choices()
-loaded_shoot_month = str(loaded_draft.get("Shoot_List_Month", "") or "").strip()
+loaded_shoot_month = friendly_shoot_month(
+    loaded_draft.get("Shoot_List_Month", "")
+)
 
 if loaded_shoot_month and loaded_shoot_month not in shoot_choices:
     shoot_choices = [loaded_shoot_month] + shoot_choices
@@ -2735,7 +2766,7 @@ with draft_col1:
                 "Known_Info": known_info,
                 "Internal_Notes": notes,
                 "Target_Price": target_price,
-                "Shoot_List_Month": shoot_month,
+                "Shoot_List_Month": friendly_shoot_month(shoot_month),
                 "Last_Updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
                 "User_Role": current_role,
                 "Generated_Item_ID": lifecycle_item_id,
@@ -2906,7 +2937,7 @@ if generate_draft_clicked:
             "Known_Info": known_info,
             "Internal_Notes": notes,
             "Target_Price": target_price,
-            "Shoot_List_Month": shoot_month,
+            "Shoot_List_Month": friendly_shoot_month(shoot_month),
             "Last_Updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
             "User_Role": current_role,
             "Generated_Item_ID": st.session_state.get("item_id", ""),
@@ -3340,7 +3371,7 @@ if "draft" in st.session_state:
             "Known_Info": st.session_state.get("input_known_info", ""),
             "Internal_Notes": st.session_state.get("input_notes", ""),
             "Target_Price": st.session_state.get("input_target_price", ""),
-            "Shoot_List_Month": shoot_month,
+            "Shoot_List_Month": friendly_shoot_month(shoot_month),
             "Last_Updated": save_now,
             "User_Role": current_role,
             "Generated_Item_ID": lifecycle_item_id,
@@ -3393,7 +3424,7 @@ if "draft" in st.session_state:
             "Action": "Inventory_Save",
             "Item_ID": item_id,
             "Status": "Awaiting Photography",
-            "Shoot_List_Month": shoot_month,
+            "Shoot_List_Month": friendly_shoot_month(shoot_month),
             "Shoot_List_Tab": shoot_list_tab_name(shoot_month),
             "Primary_Image": image_formula,
             "Primary_Image_URL": primary_url, "Additional_Images": ", ".join(st.session_state.get("photo_names", [])[1:]),
@@ -3425,7 +3456,7 @@ if "draft" in st.session_state:
         learning_payload = {
             "Timestamp": now,
             "Item_ID": item_id,
-            "Shoot_List_Month": shoot_month,
+            "Shoot_List_Month": friendly_shoot_month(shoot_month),
             "Shoot_List_Tab": shoot_list_tab_name(shoot_month),
             "Original_AI_Title": original.get("title", ""), "Final_Approved_Title": title,
             "Original_AI_Description": original.get("description", ""), "Final_Approved_Description": description,
