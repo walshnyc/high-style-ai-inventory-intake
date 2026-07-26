@@ -17,7 +17,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Version 3.7.4"
+APP_TITLE = "High Style AI – Version 3.7.5"
 
 # -----------------------------
 # State / Reset
@@ -32,6 +32,14 @@ def init_state():
         st.session_state["retry_history"] = []
 
 def clear_entry_state():
+    st.session_state["dims_inputs"] = {
+        "height": "",
+        "width": "",
+        "depth": "",
+        "diameter": "",
+        "body_height": "",
+        "seat_height": "",
+    }
     exact_keys = [
         "draft", "item_id", "photo_names", "dims_inputs", "dims_formatted",
         "input_notes", "photos_for_save", "last_saved", "original_ai_draft",
@@ -2130,6 +2138,137 @@ def draft_sort_key(draft):
         parse_datetime_value(draft.get("Completed_Date", "")),
     )
 
+def build_dims_inputs_from_record(record):
+    """Rebuild dimensions session state from a saved draft or approved record."""
+    record = dict(record or {})
+    return {
+        "height": str(record.get("Height_in", "") or ""),
+        "width": str(record.get("Width_in", "") or ""),
+        "depth": str(record.get("Depth_in", "") or ""),
+        "diameter": str(record.get("Diameter_in", "") or ""),
+        "body_height": str(record.get("Body_Height_in", "") or ""),
+        "seat_height": str(record.get("Seat_Height_in", "") or ""),
+    }
+
+
+def approved_record_to_generated_draft(record):
+    """Restore complete editable listing data from approved inventory fields."""
+    record = dict(record or {})
+
+    existing = restore_generated_draft(record)
+    if existing:
+        return existing
+
+    materials_raw = str(
+        record.get("Materials", "")
+        or record.get("Generated_Materials_JSON", "")
+        or ""
+    )
+    materials = [
+        value.strip()
+        for value in materials_raw.split(",")
+        if value.strip()
+    ]
+
+    seo_raw = str(
+        record.get("SEO_Keywords", "")
+        or record.get("Generated_SEO_Keywords_JSON", "")
+        or ""
+    )
+    seo_keywords = [
+        value.strip()
+        for value in seo_raw.split(",")
+        if value.strip()
+    ]
+
+    restored = {
+        "title": str(
+            record.get("Title", "")
+            or record.get("Generated_Title", "")
+            or ""
+        ),
+        "description": str(
+            record.get("Description", "")
+            or record.get("Generated_Description", "")
+            or ""
+        ),
+        "suggested_price_usd": str(
+            record.get("Suggested_Price_USD", "")
+            or record.get("Generated_Suggested_Price", "")
+            or ""
+        ),
+        "approved_price_usd": str(
+            record.get("Approved_Price_USD", "")
+            or ""
+        ),
+        "ai_confidence_0_to_100": str(
+            record.get("AI_Confidence", "")
+            or record.get("Generated_AI_Confidence", "")
+            or ""
+        ),
+        "category": str(
+            record.get("Category", "")
+            or record.get("Generated_Category", "")
+            or ""
+        ),
+        "subcategory": str(
+            record.get("Subcategory", "")
+            or record.get("Generated_Subcategory", "")
+            or ""
+        ),
+        "style": str(
+            record.get("Style", "")
+            or record.get("Generated_Style", "")
+            or ""
+        ),
+        "period": str(
+            record.get("Period", "")
+            or record.get("Generated_Period", "")
+            or ""
+        ),
+        "country": str(
+            record.get("Country", "")
+            or record.get("Generated_Country", "")
+            or ""
+        ),
+        "designer_or_maker": str(
+            record.get("Designer_or_Maker", "")
+            or record.get("Generated_Designer_Maker", "")
+            or ""
+        ),
+        "materials": materials,
+        "dimensions_formatted": str(
+            record.get("Dimensions", "")
+            or record.get("Generated_Dimensions", "")
+            or ""
+        ),
+        "condition_notes": str(
+            record.get("Condition_Notes", "")
+            or record.get("Generated_Condition_Notes", "")
+            or ""
+        ),
+        "price_tag_text": str(
+            record.get("Generated_Price_Tag_Text", "")
+            or record.get("Price_Tag_Text", "")
+            or ""
+        ),
+        "seo_keywords": seo_keywords,
+        "internal_notes_for_review": str(
+            record.get("Generated_Internal_Review_Notes", "")
+            or ""
+        ),
+        "revision_summary": str(
+            record.get("Generated_Revision_Summary", "")
+            or ""
+        ),
+    }
+
+    return restored if any(
+        str(value or "").strip()
+        for value in restored.values()
+    ) else {}
+
+
 def is_approved_record(draft):
     status = str(draft.get("Status", "") or "").strip().lower()
     return (
@@ -2168,8 +2307,34 @@ def load_draft_into_editor(draft):
     st.session_state["loaded_draft"] = draft
     st.session_state["restored_draft_photos"] = restored_photos
     st.session_state["restored_photo_errors"] = restore_errors
+    st.session_state["input_known_info"] = str(
+        draft.get("Known_Info", "")
+        or draft.get("Title", "")
+        or draft.get("Generated_Title", "")
+        or ""
+    )
+    st.session_state["input_notes"] = str(
+        draft.get("Internal_Notes", "")
+        or ""
+    )
+    st.session_state["input_target_price"] = str(
+        draft.get("Target_Price", "")
+        or draft.get("Approved_Price_USD", "")
+        or draft.get("Suggested_Price_USD", "")
+        or ""
+    )
+    st.session_state["input_shoot_month"] = friendly_shoot_month(
+        draft.get("Shoot_List_Month", "")
+        or ""
+    )
 
-    restored_ai_draft = restore_generated_draft(draft)
+    st.session_state["dims_inputs"] = build_dims_inputs_from_record(draft)
+
+    restored_ai_draft = (
+        approved_record_to_generated_draft(draft)
+        if editing_approved
+        else restore_generated_draft(draft)
+    )
     if restored_ai_draft:
         st.session_state["draft"] = restored_ai_draft
         original_ai = restore_json_field(
@@ -3014,7 +3179,13 @@ if st.session_state.get("brain_matches"):
 if "draft" in st.session_state:
     draft = st.session_state["draft"]
     original = st.session_state.get("original_ai_draft", draft)
-    inputs = st.session_state["dims_inputs"]
+    inputs = st.session_state.get("dims_inputs")
+if not isinstance(inputs, dict):
+    inputs = build_dims_inputs_from_record(
+        st.session_state.get("loaded_draft", {})
+    )
+    st.session_state["dims_inputs"] = inputs
+
 
     st.divider()
     st.header("4. Review / Edit Draft")
