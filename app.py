@@ -17,7 +17,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Version 3.7.5"
+APP_TITLE = "High Style AI – Version 3.7.6"
 
 # -----------------------------
 # State / Reset
@@ -3010,6 +3010,20 @@ with new_entry_col:
 
 if start_new_entry_clicked:
     clear_entry_state()
+    st.session_state.setdefault(
+        "dims_inputs",
+        {
+            "height": "",
+            "width": "",
+            "depth": "",
+            "diameter": "",
+            "body_height": "",
+            "seat_height": "",
+        },
+    )
+    st.session_state["editing_approved_item"] = False
+    st.session_state.pop("approved_item_id", None)
+    st.session_state.pop("approved_source_draft_id", None)
     st.rerun()
 
 if generate_draft_clicked:
@@ -3180,12 +3194,12 @@ if "draft" in st.session_state:
     draft = st.session_state["draft"]
     original = st.session_state.get("original_ai_draft", draft)
     inputs = st.session_state.get("dims_inputs")
-if not isinstance(inputs, dict):
-    inputs = build_dims_inputs_from_record(
-        st.session_state.get("loaded_draft", {})
-    )
-    st.session_state["dims_inputs"] = inputs
 
+    if not isinstance(inputs, dict):
+        inputs = build_dims_inputs_from_record(
+            st.session_state.get("loaded_draft", {})
+        )
+        st.session_state["dims_inputs"] = inputs
 
     st.divider()
     st.header("4. Review / Edit Draft")
@@ -3519,6 +3533,20 @@ if not isinstance(inputs, dict):
 
     if clear_new_entry_clicked:
         clear_entry_state()
+        st.session_state.setdefault(
+            "dims_inputs",
+            {
+                "height": "",
+                "width": "",
+                "depth": "",
+                "diameter": "",
+                "body_height": "",
+                "seat_height": "",
+            },
+        )
+        st.session_state["editing_approved_item"] = False
+        st.session_state.pop("approved_item_id", None)
+        st.session_state.pop("approved_source_draft_id", None)
         st.rerun()
 
     if not web_app_url:
