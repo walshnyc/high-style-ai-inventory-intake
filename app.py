@@ -17,7 +17,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Version 3.7.7"
+APP_TITLE = "High Style AI – Version 3.9.0 RC1"
 
 # -----------------------------
 # State / Reset
@@ -30,6 +30,10 @@ def init_state():
         st.session_state["form_version"] = 0
     if "retry_history" not in st.session_state:
         st.session_state["retry_history"] = []
+    if "photos_for_save" not in st.session_state:
+        st.session_state["photos_for_save"] = []
+    if "draft_photo_urls" not in st.session_state:
+        st.session_state["draft_photo_urls"] = []
 
 def clear_entry_state():
     st.session_state["dims_inputs"] = {
@@ -2307,6 +2311,12 @@ def load_draft_into_editor(draft):
     st.session_state["loaded_draft"] = draft
     st.session_state["restored_draft_photos"] = restored_photos
     st.session_state["restored_photo_errors"] = restore_errors
+    # Reopened Review/Approved records already have Cloudinary-backed photos.
+    # Restore them into the same state keys used by the approval workflow so
+    # approval never depends on a temporary uploader object from an old run.
+    st.session_state["photos_for_save"] = list(restored_photos)
+    st.session_state["photo_names"] = [photo.name for photo in restored_photos]
+    st.session_state["draft_photo_urls"] = parse_draft_photo_urls(draft)
     st.session_state["input_known_info"] = str(
         draft.get("Known_Info", "")
         or draft.get("Title", "")
@@ -3673,10 +3683,45 @@ if "draft" in st.session_state:
             st.error(draft_save_msg)
 
     if approve_clicked:
-        with st.spinner("Uploading primary image to Cloudinary..."):
-            primary_url, upload_error = upload_to_cloudinary(st.session_state["photos_for_save"][0], item_id)
+        # New uploads are temporary Streamlit objects, while reopened Review
+        # items normally have only persistent Cloudinary URLs. Reuse the saved
+        # URL whenever possible and upload only when a local photo is present.
+        photos_for_save = list(st.session_state.get("photos_for_save", []) or [])
+        saved_photo_urls = (
+            parse_draft_photo_urls(loaded_draft)
+            or list(st.session_state.get("draft_photo_urls", []) or [])
+        )
+
+        primary_url = str(
+            loaded_draft.get("Primary_Image_URL", "")
+            or (saved_photo_urls[0] if saved_photo_urls else "")
+            or ""
+        ).strip()
+        upload_error = ""
+
+        if photos_for_save:
+            first_photo = photos_for_save[0]
+            existing_source_url = str(
+                getattr(first_photo, "source_url", "") or ""
+            ).strip()
+            if existing_source_url:
+                primary_url = existing_source_url
+            elif not primary_url:
+                with st.spinner("Uploading primary image to Cloudinary..."):
+                    primary_url, upload_error = upload_to_cloudinary(
+                        first_photo,
+                        item_id,
+                    )
+
         if upload_error:
             st.error(f"Cloudinary upload failed: {upload_error}")
+            st.stop()
+
+        if not primary_url:
+            st.error(
+                "No primary image is available for this item. "
+                "Please restore or upload at least one photo before approval."
+            )
             st.stop()
 
         image_formula = f'=IMAGE("{primary_url}", 4, 120, 120)'
@@ -3700,7 +3745,7 @@ if "draft" in st.session_state:
             "Shoot_List_Month": friendly_shoot_month(shoot_month),
             "Shoot_List_Tab": shoot_list_tab_name(shoot_month),
             "Primary_Image": image_formula,
-            "Primary_Image_URL": primary_url, "Additional_Images": ", ".join(st.session_state.get("photo_names", [])[1:]),
+            "Primary_Image_URL": primary_url, "Additional_Images": ", ".join(saved_photo_urls[1:] or st.session_state.get("photo_names", [])[1:]),
             "AI_Confidence": confidence, "Title": title, "Description": description, "Dimensions": dims_final,
             "Height_in": inputs.get("height", ""), "Width_in": inputs.get("width", ""), "Depth_in": inputs.get("depth", ""),
             "Diameter_in": inputs.get("diameter", ""), "Body_Height_in": inputs.get("body_height", ""), "Seat_Height_in": inputs.get("seat_height", ""),
@@ -3843,4 +3888,19 @@ if "draft" in st.session_state:
                 )
 
         st.session_state["last_saved"] = True
+
+        # Approval is complete. Close the editor and return the item to the
+        # dashboard, where the refreshed status places it in Approved.
+        st.session_state.pop("draft", None)
+        st.session_state.pop("original_ai_draft", None)
+        st.session_state.pop("loaded_draft", None)
+        st.session_state.pop("restored_draft_photos", None)
+        st.session_state.pop("restored_photo_errors", None)
+        st.session_state.pop("photos_for_save", None)
+        st.session_state.pop("photo_names", None)
+        st.session_state.pop("draft_photo_urls", None)
+        st.session_state["editing_approved_item"] = False
+        st.session_state.pop("approved_item_id", None)
+        st.session_state.pop("approved_source_draft_id", None)
+        invalidate_draft_dashboard()
         st.rerun()
