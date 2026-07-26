@@ -17,7 +17,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Version 3.7.3"
+APP_TITLE = "High Style AI – Version 3.7.4"
 
 # -----------------------------
 # State / Reset
@@ -2130,8 +2130,38 @@ def draft_sort_key(draft):
         parse_datetime_value(draft.get("Completed_Date", "")),
     )
 
+def is_approved_record(draft):
+    status = str(draft.get("Status", "") or "").strip().lower()
+    return (
+        status in {"approved", "completed", "awaiting photography"}
+        or bool(str(draft.get("Approved_Date", "") or "").strip())
+        or bool(str(draft.get("Completed_Date", "") or "").strip())
+    )
+
+
+def is_editing_approved_item():
+    return bool(st.session_state.get("editing_approved_item", False))
+
+
 def load_draft_into_editor(draft):
-    """Restore a saved draft and its Cloudinary photos into the intake form."""
+    """Restore a saved record and its Cloudinary photos into the intake form."""
+    editing_approved = is_approved_record(draft)
+    st.session_state["editing_approved_item"] = editing_approved
+    if editing_approved:
+        st.session_state["approved_item_id"] = str(
+            draft.get("Generated_Item_ID", "")
+            or draft.get("Item_ID", "")
+            or st.session_state.get("item_id", "")
+            or ""
+        )
+        st.session_state["approved_source_draft_id"] = str(
+            draft.get("Draft_ID", "")
+            or draft.get("Source_Draft_ID", "")
+            or ""
+        )
+    else:
+        st.session_state.pop("approved_item_id", None)
+        st.session_state.pop("approved_source_draft_id", None)
     with st.spinner("Connecting saved Cloudinary photos to this draft..."):
         restored_photos, restore_errors = restore_draft_photos(draft)
 
@@ -2226,8 +2256,13 @@ def display_draft_thumbnail_gallery(drafts, allow_load=True, key_prefix="gallery
                         st.caption(short_note)
 
                     if allow_load:
+                        open_label = (
+                            "Edit Approved Item"
+                            if is_approved_record(draft)
+                            else "Open"
+                        )
                         if st.button(
-                            "Open",
+                            open_label,
                             type="primary",
                             use_container_width=True,
                             key=f"{key_prefix}_open_{index}_{draft_id}",
@@ -2580,7 +2615,7 @@ with approved_tab:
     else:
         display_draft_thumbnail_gallery(
             filtered_approved,
-            allow_load=False,
+            allow_load=True,
             key_prefix="approved_stage_gallery",
             columns_count=5,
         )
@@ -2916,7 +2951,11 @@ if generate_draft_clicked:
         st.session_state["draft_photo_urls"] = existing_urls
         generated_payload = {
             "Draft_ID": draft_id,
-            "Status": "Ready for Review",
+            "Status": (
+                "Approved"
+                if is_editing_approved_item()
+                else "Ready for Review"
+            ),
             "Submitted_By": (
                 loaded_draft.get("Submitted_By", "")
                 or current_user
@@ -3243,18 +3282,39 @@ if "draft" in st.session_state:
     }]
     st.dataframe(preview, width="stretch", hide_index=True)
 
-    st.header("6. Save or Approve")
+    st.header(
+        "6. Update Approved Item"
+        if is_editing_approved_item()
+        else "6. Save or Approve"
+    )
     st.caption(
-        "Save the latest work as a draft, approve it to Master Inventory, "
-        "or clear the form and begin another item."
+        (
+            "Update the existing approved record. Changes are written to the "
+            "same Item_ID rows in Master Inventory and the monthly Shoot List."
+        )
+        if is_editing_approved_item()
+        else
+        (
+            "Save the latest work as a draft, approve it to Master Inventory, "
+            "or clear the form and begin another item."
+        )
     )
 
     approve_col, save_col, clear_col = st.columns(3)
 
     with approve_col:
         approve_clicked = st.button(
-            "Approve & Send to Google Sheet",
-            key=widget_key("review_approve", form_key),
+            (
+                "Update Approved Item"
+                if is_editing_approved_item()
+                else "Approve & Send to Google Sheet"
+            ),
+            key=widget_key(
+                "review_update_approved"
+                if is_editing_approved_item()
+                else "review_approve",
+                form_key,
+            ),
             type="primary",
             use_container_width=True,
             disabled=(
@@ -3374,7 +3434,10 @@ if "draft" in st.session_state:
             "Shoot_List_Month": friendly_shoot_month(shoot_month),
             "Last_Updated": save_now,
             "User_Role": current_role,
-            "Generated_Item_ID": lifecycle_item_id,
+            "Generated_Item_ID": (
+                st.session_state.get("approved_item_id", "")
+                or lifecycle_item_id
+            ),
         }
         reviewed_draft_payload.update(
             generated_draft_fields(current_saved_draft)
@@ -3395,8 +3458,16 @@ if "draft" in st.session_state:
             st.session_state["dims_formatted"] = dims_final
             invalidate_draft_dashboard()
             st.success(
-                "Draft saved. The same Master Inventory and Shoot List rows "
-                "were updated and remain marked Ready for Review."
+                (
+                    "Approved item changes saved to the same Master Inventory "
+                    "and Shoot List rows."
+                )
+                if is_editing_approved_item()
+                else
+                (
+                    "Draft saved. The same Master Inventory and Shoot List rows "
+                    "were updated and remain marked Ready for Review."
+                )
             )
             st.rerun()
         else:
@@ -3422,8 +3493,11 @@ if "draft" in st.session_state:
 
         payload = {
             "Action": "Inventory_Save",
-            "Item_ID": item_id,
-            "Status": "Awaiting Photography",
+            "Item_ID": (
+                st.session_state.get("approved_item_id", "")
+                or item_id
+            ),
+            "Status": "Approved",
             "Shoot_List_Month": friendly_shoot_month(shoot_month),
             "Shoot_List_Tab": shoot_list_tab_name(shoot_month),
             "Primary_Image": image_formula,
@@ -3438,10 +3512,21 @@ if "draft" in st.session_state:
             "Ready_For_Photos": "Yes", "Ready_For_Publishing": "No", "Created_Date": now, "Last_Updated": now, "SEO_Keywords": seo_text,
             "Submitted_By": st.session_state.get("submitted_by", current_user),
             "Submitted_Date": st.session_state.get("submitted_date", now),
-            "Approved_By": current_user,
-            "Approved_Date": now,
+            "Approved_By": (
+                loaded_draft.get("Approved_By", "")
+                or current_user
+            ),
+            "Approved_Date": (
+                loaded_draft.get("Approved_Date", "")
+                or now
+            ),
+            "Last_Edited_By": current_user,
+            "Last_Edited_Date": now,
             "User_Role": current_role,
-            "Source_Draft_ID": loaded_draft.get("Draft_ID", ""),
+            "Source_Draft_ID": (
+                st.session_state.get("approved_source_draft_id", "")
+                or loaded_draft.get("Draft_ID", "")
+            ),
             "Retry_Count": len(st.session_state.get("retry_history", [])),
             "Original_AI_Title": original.get("title", ""),
             "Original_AI_Description": original.get("description", ""),
