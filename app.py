@@ -17,7 +17,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Version 3.9.3 RC4"
+APP_TITLE = "High Style AI – Version 3.9.4 RC5"
 
 # -----------------------------
 # State / Reset
@@ -3624,6 +3624,8 @@ if "draft" in st.session_state:
                 f"{symbol} {rule_check['name']}: {rule_check['detail']}"
             )
 
+    house_rules_override = False
+
     if live_house_validation["mandatory_ok"]:
         st.success(
             "All mandatory house rules pass. "
@@ -3631,10 +3633,29 @@ if "draft" in st.session_state:
         )
     else:
         st.warning(
-            "Approval is blocked until every mandatory "
-            "house rule passes. Edit the fields or use "
-            "Try Again With Feedback."
+            "The AI output does not meet every house rule. "
+            "You can edit the listing, use Try Again With Feedback, "
+            "or approve it with a human override."
         )
+        house_rules_override = st.checkbox(
+            "Human override: I have reviewed the failed house rules and approve this item as edited.",
+            key=widget_key("house_rules_human_override", form_key),
+            help=(
+                "Use this only when a person has intentionally reviewed the listing "
+                "and determined that the final wording should be approved despite "
+                "one or more automated house-rule warnings."
+            ),
+        )
+        if house_rules_override:
+            st.info(
+                "Human override enabled. The item can now be approved and the "
+                "override will be recorded in the learning audit trail."
+            )
+
+    approval_eligible = (
+        live_house_validation["mandatory_ok"]
+        or house_rules_override
+    )
 
     st.subheader("Audit Trail Preview")
     audit_preview_metrics = summarize_audit_metrics(
@@ -3709,13 +3730,13 @@ if "draft" in st.session_state:
             type="primary",
             use_container_width=True,
             disabled=(
-                not live_house_validation["mandatory_ok"]
+                not approval_eligible
                 or not web_app_url
                 or not c_ok
             ),
             help=(
-                "Resolve the failed House Rules Check before approval."
-                if not live_house_validation["mandatory_ok"]
+                "Review the failed house rules and select the Human override checkbox to approve."
+                if not approval_eligible
                 else "Approve and update the existing Master Inventory and monthly Shoot List rows."
             ),
         )
@@ -4000,6 +4021,15 @@ if "draft" in st.session_state:
                 "original_price": original.get("suggested_price_usd", ""),
                 "final_price": price,
                 "retry_count": len(st.session_state.get("retry_history", [])),
+                "house_rules_mandatory_ok": live_house_validation["mandatory_ok"],
+                "house_rules_human_override": house_rules_override,
+                "failed_house_rules": [
+                    {
+                        "name": check.get("name", ""),
+                        "detail": check.get("detail", ""),
+                    }
+                    for check in failed_rule_checks
+                ],
                 "metrics": audit_metrics
             }, default=str),
             "Submitted_By": st.session_state.get("submitted_by", current_user),
