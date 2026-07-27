@@ -17,7 +17,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Version 3.9.2 RC3"
+APP_TITLE = "High Style AI – Version 3.9.3 RC4"
 
 # -----------------------------
 # State / Reset
@@ -52,6 +52,7 @@ def clear_entry_state():
         "title_review_", "description_review_", "suggested_price_review_",
         "approved_price_review_", "confidence_review_", "category_review_",
         "subcategory_review_", "style_review_", "period_review_", "country_review_",
+        "date_made_review_", "origin_date_review_",
         "maker_review_", "materials_review_", "dims_final_review_",
         "condition_notes_review_", "price_tag_review_", "seo_review_",
         "internal_review_notes_", "title_feedback_", "description_feedback_",
@@ -259,6 +260,10 @@ def generated_draft_fields(draft):
         "Generated_Style": draft.get("style", ""),
         "Generated_Period": draft.get("period", ""),
         "Generated_Country": draft.get("country", ""),
+        "Generated_Date_Made": draft.get("date_made", ""),
+        "Generated_Origin_and_Date": format_origin_and_date(
+            draft.get("country", ""), draft.get("date_made", "")
+        ),
         "Generated_Designer_Maker": draft.get("designer_or_maker", ""),
         "Generated_Materials_JSON": serialize_list_value(draft.get("materials", [])),
         "Generated_Dimensions": draft.get("dimensions_formatted", ""),
@@ -322,6 +327,7 @@ def capture_review_edits_from_session(draft, form_key):
         "style": value("style_review", current.get("style", "")),
         "period": value("period_review", current.get("period", "")),
         "country": value("country_review", current.get("country", "")),
+        "date_made": value("date_made_review", current.get("date_made", "")),
         "designer_or_maker": value(
             "maker_review",
             current.get("designer_or_maker", ""),
@@ -409,6 +415,7 @@ def restore_generated_draft(draft):
         "style": draft.get("Generated_Style", ""),
         "period": draft.get("Generated_Period", ""),
         "country": draft.get("Generated_Country", ""),
+        "date_made": draft.get("Generated_Date_Made", ""),
         "designer_or_maker": draft.get("Generated_Designer_Maker", ""),
         "materials": materials,
         "dimensions_formatted": draft.get("Generated_Dimensions", ""),
@@ -1602,6 +1609,34 @@ def normalize_price(value):
     except Exception:
         return s
 
+def format_origin_and_date(country, date_made):
+    """Create the price-tag origin/date line with correct circa usage."""
+    country_text = str(country or "").strip()
+    date_text = str(date_made or "").strip()
+
+    nationality_map = {
+        "united states": "American",
+        "usa": "American",
+        "u.s.a.": "American",
+        "us": "American",
+        "u.s.": "American",
+    }
+    display_country = nationality_map.get(country_text.lower(), country_text)
+
+    if not display_country and not date_text:
+        return ""
+    if not date_text:
+        return display_country
+    if not display_country:
+        return date_text
+
+    century_only = bool(re.fullmatch(r"(?:20th|21st)\s+Century", date_text, flags=re.I))
+    clean_date = re.sub(r"^circa\s+", "", date_text, flags=re.I).strip()
+    if century_only:
+        return f"{display_country}, {clean_date}"
+    return f"{display_country}, circa {clean_date}"
+
+
 def word_count(text):
     return len(str(text or "").split())
 
@@ -1683,7 +1718,8 @@ def base_prompt(
         "subcategory": "specific item type",
         "style": "period/style",
         "period": "period or movement",
-        "country": "metadata only",
+        "country": "country of origin only, such as France, United States, or Italy",
+        "date_made": "specific year, decade, or century, such as 1930, 1945, 1950, 20th Century, or 21st Century",
         "designer_or_maker": "confirmed/attributed/Unknown",
         "materials": ["material 1", "material 2"],
         "condition_notes": "positive factual condition language",
@@ -1720,6 +1756,13 @@ MANDATORY TITLE RULES:
 - Do not include years, dates, decades, circa, c., or ca.
 - Use the strongest accurate descriptive features.
 - Do not state a maker as confirmed unless it is confirmed.
+
+ORIGIN AND DATE RULES:
+- Return country as the country of origin only.
+- Return date_made as a year, decade, or century.
+- Use the best supported date and do not invent precision.
+- The app will format the display line as “France, circa 1930”.
+- For “20th Century” or “21st Century”, the app will omit “circa”.
 
 MANDATORY DESCRIPTION RULES:
 - The description MUST contain between {DESCRIPTION_MIN_WORDS} and {DESCRIPTION_MAX_WORDS} words. This is non-negotiable.
@@ -1862,7 +1905,8 @@ def retry_with_feedback(
         "subcategory": "specific item type",
         "style": "period/style",
         "period": "period or movement",
-        "country": "metadata only",
+        "country": "country of origin only",
+        "date_made": "specific year, decade, or century",
         "designer_or_maker": "confirmed/attributed/Unknown",
         "materials": ["material 1", "material 2"],
         "condition_notes": "positive factual language",
@@ -1914,6 +1958,7 @@ MANDATORY RULES:
 - Lighting must include exactly:
   "{LIGHTING_CONDITION_SENTENCE}"
 - Preserve dimensions exactly unless feedback explicitly changes them.
+- Preserve or revise country and date_made according to the user feedback and supported evidence.
 - Do not invent facts.
 
 ITEM CONTEXT:
@@ -2329,6 +2374,11 @@ def approved_record_to_generated_draft(record):
         "country": str(
             record.get("Country", "")
             or record.get("Generated_Country", "")
+            or ""
+        ),
+        "date_made": str(
+            record.get("Date_Made", "")
+            or record.get("Generated_Date_Made", "")
             or ""
         ),
         "designer_or_maker": str(
@@ -3323,6 +3373,25 @@ if "draft" in st.session_state:
     )
     title = st.text_input("Title", value=str(draft.get("title", "")), max_chars=80, key=f"title_review_{form_key}")
     st.caption(f"Title length: {len(title)} / 80")
+
+    origin_col, date_col = st.columns(2)
+    with origin_col:
+        country = st.text_input(
+            "Country of Origin",
+            value=str(draft.get("country", "")),
+            key=f"country_review_{form_key}",
+        )
+    with date_col:
+        date_made = st.text_input(
+            "Date Made",
+            value=str(draft.get("date_made", "")),
+            placeholder="1930 or 20th Century",
+            key=f"date_made_review_{form_key}",
+        )
+    origin_and_date = format_origin_and_date(country, date_made)
+    if origin_and_date:
+        st.markdown(f"**{origin_and_date}**")
+
     description = st.text_area("Description", value=str(draft.get("description", "")), height=260, key=f"description_review_{form_key}")
     st.caption(f"Approx word count: {len(description.split())}")
 
@@ -3343,10 +3412,9 @@ if "draft" in st.session_state:
     with c5: subcategory = st.text_input("Subcategory", value=str(draft.get("subcategory", "")), key=f"subcategory_review_{form_key}")
     with c6: style = st.text_input("Style", value=str(draft.get("style", "")), key=f"style_review_{form_key}")
 
-    c7, c8, c9 = st.columns(3)
-    with c7: period = st.text_input("Period", value=str(draft.get("period", "")), key=f"period_review_{form_key}")
-    with c8: country = st.text_input("Country / Region", value=str(draft.get("country", "")), key=f"country_review_{form_key}")
-    with c9: maker = st.text_input("Designer / Maker", value=str(draft.get("designer_or_maker", "")), key=f"maker_review_{form_key}")
+    c7, c8 = st.columns(2)
+    with c7: period = st.text_input("Period / Movement", value=str(draft.get("period", "")), key=f"period_review_{form_key}")
+    with c8: maker = st.text_input("Designer / Maker", value=str(draft.get("designer_or_maker", "")), key=f"maker_review_{form_key}")
 
     mats = draft.get("materials", [])
     materials_text_default = ", ".join(mats) if isinstance(mats, list) else str(mats)
@@ -3401,6 +3469,8 @@ if "draft" in st.session_state:
             "current_subcategory": subcategory,
             "current_style": style,
             "current_period": period,
+            "current_country": country,
+            "current_date_made": date_made,
             "current_maker": maker,
             "current_materials": materials_text,
             "high_style_brain_matches": st.session_state.get("brain_matches", []),
@@ -3416,6 +3486,7 @@ if "draft" in st.session_state:
             "style": style,
             "period": period,
             "country": country,
+            "date_made": date_made,
             "designer_or_maker": maker,
             "materials": materials_text,
             "condition_notes": condition_notes,
@@ -3490,6 +3561,7 @@ if "draft" in st.session_state:
         "style": style,
         "period": period,
         "country": country,
+        "date_made": date_made,
     }
 
     live_house_validation = house_rule_validation(
@@ -3530,16 +3602,26 @@ if "draft" in st.session_state:
             repair_count,
         )
 
-    for rule_check in live_house_validation["checks"]:
-        if rule_check["passed"]:
-            st.success(
-                f"✓ {rule_check['name']}: "
-                f"{rule_check['detail']}"
-            )
-        else:
+    failed_rule_checks = [
+        check for check in live_house_validation["checks"]
+        if not check["passed"]
+    ]
+
+    if failed_rule_checks:
+        st.error(
+            f"{len(failed_rule_checks)} house rule"
+            f"{'s' if len(failed_rule_checks) != 1 else ''} need attention."
+        )
+        for rule_check in failed_rule_checks:
             st.error(
-                f"✗ {rule_check['name']}: "
-                f"{rule_check['detail']}"
+                f"✗ {rule_check['name']}: {rule_check['detail']}"
+            )
+
+    with st.expander("View all House Rules checks", expanded=False):
+        for rule_check in live_house_validation["checks"]:
+            symbol = "✓" if rule_check["passed"] else "✗"
+            st.write(
+                f"{symbol} {rule_check['name']}: {rule_check['detail']}"
             )
 
     if live_house_validation["mandatory_ok"]:
@@ -3582,6 +3664,7 @@ if "draft" in st.session_state:
         "Item ID": item_id,
         "Image": "Cloudinary thumbnail will appear in Google Sheet",
         "Title": title,
+        "Origin and Date": origin_and_date,
         "Dimensions": dims_final,
         "Price": normalize_price(approved_price),
         "Description": description,
@@ -3690,6 +3773,7 @@ if "draft" in st.session_state:
             "style": style,
             "period": period,
             "country": country,
+            "date_made": date_made,
             "designer_or_maker": maker,
             "materials": [
                 value.strip()
@@ -3854,6 +3938,7 @@ if "draft" in st.session_state:
             "Diameter_in": inputs.get("diameter", ""), "Body_Height_in": inputs.get("body_height", ""), "Seat_Height_in": inputs.get("seat_height", ""),
             "Suggested_Price_USD": normalize_price(suggested_price), "Approved_Price_USD": price,
             "Category": category, "Subcategory": subcategory, "Style": style, "Period": period, "Country": country,
+            "Date_Made": date_made, "Origin_and_Date": origin_and_date,
             "Designer_or_Maker": maker, "Materials": materials_text, "Condition_Notes": condition_notes,
             "Internal_Notes": (st.session_state.get("input_notes", "") + " | " + review_notes).strip(" |"),
             "Ready_For_Photos": "Yes", "Ready_For_Publishing": "No", "Created_Date": now, "Last_Updated": now, "SEO_Keywords": seo_text,
