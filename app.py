@@ -1,4 +1,4 @@
-import os, json, re, base64, uuid, tempfile, sqlite3, gzip
+import os, json, re, base64, uuid, tempfile, sqlite3, gzip, hashlib
 from io import BytesIO
 from datetime import datetime
 
@@ -17,7 +17,7 @@ try:
 except Exception:
     cloudinary = None
 
-APP_TITLE = "High Style AI – Version 3.9.4 RC5"
+APP_TITLE = "High Style AI – Version 3.9.5 RC6"
 
 # -----------------------------
 # State / Reset
@@ -55,7 +55,7 @@ def clear_entry_state():
         "date_made_review_", "origin_date_review_",
         "maker_review_", "materials_review_", "dims_final_review_",
         "condition_notes_review_", "price_tag_review_", "seo_review_",
-        "internal_review_notes_", "title_feedback_", "description_feedback_",
+        "internal_review_notes_", "house_rules_human_override_", "title_feedback_", "description_feedback_",
         "price_feedback_", "reference_feedback_", "changed_notes_", "shoot_month_select_"
     ]
     for k in list(st.session_state.keys()):
@@ -3637,9 +3637,39 @@ if "draft" in st.session_state:
             "You can edit the listing, use Try Again With Feedback, "
             "or approve it with a human override."
         )
+        # Tie the override to the exact reviewed content. A prior item's
+        # checkbox state must never carry forward, and any meaningful edit
+        # requires the human to reconfirm the override.
+        override_fingerprint_source = json.dumps(
+            {
+                "item_id": item_id,
+                "title": title,
+                "description": description,
+                "category": category,
+                "subcategory": subcategory,
+                "style": style,
+                "period": period,
+                "country": country,
+                "date_made": date_made,
+                "failed_rules": [
+                    check.get("name", "") for check in failed_rule_checks
+                ],
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        override_fingerprint = hashlib.sha256(
+            override_fingerprint_source.encode("utf-8")
+        ).hexdigest()[:12]
+        override_key = (
+            f"house_rules_human_override_{form_key}_"
+            f"{str(item_id or 'new')}_{override_fingerprint}"
+        )
+
         house_rules_override = st.checkbox(
             "Human override: I have reviewed the failed house rules and approve this item as edited.",
-            key=widget_key("house_rules_human_override", form_key),
+            key=override_key,
+            value=False,
             help=(
                 "Use this only when a person has intentionally reviewed the listing "
                 "and determined that the final wording should be approved despite "
@@ -3898,6 +3928,16 @@ if "draft" in st.session_state:
             st.error(draft_save_msg)
 
     if approve_clicked:
+        # Defense in depth: never rely only on the visual disabled state of
+        # the Streamlit button. This prevents stale widget state or reruns
+        # from bypassing the required human confirmation.
+        if not live_house_validation["mandatory_ok"] and not house_rules_override:
+            st.error(
+                "Approval blocked: review the failed house rules and select "
+                "the Human override checkbox before submitting."
+            )
+            st.stop()
+
         approval_photos = list(
             st.session_state.get("photos_for_save", [])
             or st.session_state.get("restored_draft_photos", [])
